@@ -67,6 +67,22 @@ struct gen_pool {
 	const char *name;
 };
 
+#ifdef CONFIG_ION_MONITOR
+/*
+ *  Metadata for General purpose special memory pool descriptor.
+ */
+struct gen_pool_meta { 
+	spinlock_t lock;
+	struct gen_pool pool;
+	size_t heap_size;
+	size_t free_size;
+	size_t allocated_size;	
+	size_t largest_free_buf;
+	size_t alloc_peak;
+	genpool_algo_t algo;
+};
+#endif /* CONFIG_ION_MONITOR
+
 /*
  *  General purpose special memory pool chunk descriptor.
  */

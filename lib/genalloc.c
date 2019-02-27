@@ -166,6 +166,43 @@ struct gen_pool *gen_pool_create(int min_alloc_order, int nid)
 }
 EXPORT_SYMBOL(gen_pool_create);
 
+#ifdef CONFIG_ION_MONITOR
+/**
+ * gen_pool__meta_create - create a new special memory pool wrapped by a 
+ * metadata struct
+ * @min_alloc_order: log base 2 of number of bytes each bitmap bit represents
+ * @nid: node id of the node the pool structure should be allocated on, or -1
+ *
+ * Create a new special memory pool that can be used to manage special purpose
+ * memory not managed by the regular kmalloc/kfree interface.
+ * Also creates metadata structure.
+ */
+struct gen_pool *gen_pool_meta_create(int min_alloc_order, int nid)
+{
+	struct gen_pool_meta *meta;
+
+	meta = kmalloc_node(sizeof(struct gen_pool), GFP_KERNEL, nid);
+	if (meta != NULL) {
+		spin_lock_init(&meta->lock);
+		spin_lock_init(&(meta->pool.lock));
+		INIT_LIST_HEAD(&(meta->pool.chunks));
+		meta->pool.min_alloc_order = min_alloc_order;
+		meta->pool.algo = gen_pool_first_fit;
+		meta->pool.data = NULL;
+		meta->pool.name = NULL;
+		meta->alloc_peak = 0;
+		meta->allocated_size = 0;
+	}
+	else 
+	{
+		return ERR_PTR(-ENOMEM);
+	}
+	return &meta->pool;
+}
+EXPORT_SYMBOL(gen_pool_meta_create);
+#endif /* CONFIG_ION_MONITOR */ 
+
+
 /**
  * gen_pool_add_virt - add a new chunk of special memory to the pool
  * @pool: pool to add new memory chunk to
@@ -257,6 +294,37 @@ void gen_pool_destroy(struct gen_pool *pool)
 	kfree(pool);
 }
 EXPORT_SYMBOL(gen_pool_destroy);
+
+#ifdef CONFIG_ION_MONITOR
+/**
+ * gen_pool_meta_destroy - destroy a special memory pool and its metadata
+ * @meta: pool's metadata structure to destroy
+ *
+ * Destroy the specified special memory pool and its metadata. 
+ * Verifies that there are no outstanding allocations.
+ */
+void gen_pool_meta_destroy(struct gen_pool_meta *meta)
+{
+	struct list_head *_chunk, *_next_chunk;
+	struct gen_pool_chunk *chunk;
+	int order = meta->pool.min_alloc_order;
+	int bit, end_bit;
+
+	list_for_each_safe(_chunk, _next_chunk, &meta->pool.chunks) {
+		chunk = list_entry(_chunk, struct gen_pool_chunk, next_chunk);
+		list_del(&chunk->next_chunk);
+
+		end_bit = chunk_size(chunk) >> order;
+		bit = find_next_bit(chunk->bits, end_bit, 0);
+		BUG_ON(bit < end_bit);
+
+		kfree(chunk);
+	}
+	kfree_const(meta->pool.name);
+	kfree(meta);
+}
+EXPORT_SYMBOL(gen_pool_meta_destroy);
+#endif /* CONFIG_ION_MONITOR
 
 /**
  * gen_pool_alloc - allocate special memory from the pool

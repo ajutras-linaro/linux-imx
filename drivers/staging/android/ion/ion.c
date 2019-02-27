@@ -572,6 +572,29 @@ static int debug_shrink_get(void *data, u64 *val)
 DEFINE_SIMPLE_ATTRIBUTE(debug_shrink_fops, debug_shrink_get,
 			debug_shrink_set, "%llu\n");
 
+static int ion_heap_debug_show(struct seq_file *s, void *unused)
+{
+	struct ion_heap *heap = s->private;
+	struct ion_device *dev = heap->dev;
+	seq_puts(s, "\n----- ION HEAP DEBUG SHOW -----\n");
+	if(heap->debug_show)
+		heap->debug_show(heap, s, unused);
+
+	return 0;
+}
+
+static int ion_heap_debug_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, ion_heap_debug_show, inode->i_private);
+}
+
+static const struct file_operations ion_heap_debug_fops = {
+	.open           = ion_heap_debug_open,
+	.read           = seq_read,
+	.llseek         = seq_lseek,
+	.release        = single_release,
+};
+
 void ion_device_add_heap(struct ion_heap *heap)
 {
 	struct dentry *debug_file;
@@ -599,6 +622,17 @@ void ion_device_add_heap(struct ion_heap *heap)
 	 */
 	plist_node_init(&heap->node, -heap->id);
 	plist_add(&heap->node, &dev->heaps);
+
+	debug_file = debugfs_create_file(heap->name, 0664, 
+	                                 dev->debug_root, heap,
+	                                 &ion_heap_debug_fops);
+	if (!debug_file) {
+        char buf[256], *path;
+        
+        path = dentry_path(dev->debug_root, buf, 256);
+        pr_err("Failed to create heap debugfs at %s/%s\n",
+               path, heap->name);
+    }
 
 	if (heap->shrinker.count_objects && heap->shrinker.scan_objects) {
 		char debug_name[64];
@@ -656,3 +690,5 @@ debugfs_done:
 	return 0;
 }
 subsys_initcall(ion_device_create);
+
+
