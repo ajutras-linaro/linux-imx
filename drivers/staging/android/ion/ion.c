@@ -576,7 +576,6 @@ static int ion_heap_debug_show(struct seq_file *s, void *unused)
 {
 	struct ion_heap *heap = s->private;
 	struct ion_device *dev = heap->dev;
-	seq_puts(s, "\n----- ION HEAP DEBUG SHOW -----\n");
 	if(heap->debug_show)
 		heap->debug_show(heap, s, unused);
 
@@ -588,8 +587,32 @@ static int ion_heap_debug_open(struct inode *inode, struct file *file)
 	return single_open(file, ion_heap_debug_show, inode->i_private);
 }
 
+#ifdef CONFIG_ION_MONITOR
+static ssize_t ion_heap_debug_write(struct file *fp, const char __user *user_buffer,
+	                           size_t count, loff_t *position)
+{
+	struct ion_heap* heap = fp->f_inode->i_private;
+	char ker_buf[count];
+	size_t ret;
+	ret = simple_write_to_buffer(ker_buf, sizeof(ker_buf), position, user_buffer, count);
+	if(ker_buf[0] == '1') {
+		printk("ion monitor tool enabled for %s heap\n", heap->name);
+		heap->debug_state = 1;
+	}
+	else {
+		printk("ion monitor tool disabled for %s heap\n", heap->name);
+		heap->debug_state = 0;
+	}
+	
+	return ret;
+}
+#endif /* CONFIG_ION_MONITOR */
+
 static const struct file_operations ion_heap_debug_fops = {
 	.open           = ion_heap_debug_open,
+#ifdef CONFIG_ION_MONITOR
+	.write          = ion_heap_debug_write,
+#endif /* CONFIG_ION_MONITOR */
 	.read           = seq_read,
 	.llseek         = seq_lseek,
 	.release        = single_release,
@@ -623,7 +646,7 @@ void ion_device_add_heap(struct ion_heap *heap)
 	plist_node_init(&heap->node, -heap->id);
 	plist_add(&heap->node, &dev->heaps);
 
-	debug_file = debugfs_create_file(heap->name, 0664, 
+	debug_file = debugfs_create_file(heap->name, 0644, 
 	                                 dev->debug_root, heap,
 	                                 &ion_heap_debug_fops);
 	if (!debug_file) {

@@ -46,6 +46,8 @@
 
 #define MAX_UNMAPPED_AREA 2
 
+#define to_unmapped_heap(x) container_of(x, struct ion_unmapped_heap, heap)
+
 struct rmem_unmapped {
 	phys_addr_t base;
 	phys_addr_t size;
@@ -60,6 +62,12 @@ struct ion_unmapped_heap {
 	struct gen_pool *pool;
 	phys_addr_t base;
 	size_t          size;
+	#ifdef CONFIG_ION_MONITOR
+	size_t          free_size;
+	size_t          allocated_size;
+	size_t          allocated_peak;
+	size_t          largest_free_buf;
+	#endif /* CONFIG_ION_MONITOR */
 };
 
 struct unmapped_buffer_priv {
@@ -75,6 +83,8 @@ static struct device *heap2dev(struct ion_heap *heap)
 {
 	return heap->dev->dev.this_device;
 }
+
+
 
 static phys_addr_t ion_unmapped_allocate(struct ion_heap *heap,
 					   unsigned long size,
@@ -233,11 +243,56 @@ static struct ion_heap_ops unmapped_heap_ops = {
 	return &umh->heap;
 }*/
 
+#ifdef CONFIG_ION_MONITOR
+
+/**
+ * update_unmapped_heap_info - Update the debug info of the heap
+ * @heap: ion heap
+ */
+static void update_unmapped_heap_info(struct ion_heap *heap)
+{
+	struct ion_unmapped_heap *umh = to_unmapped_heap(heap);
+
+	umh->free_size = gen_pool_avail(umh->pool);
+	umh->allocated_size = umh->size - umh->free_size;
+	if(umh->allocated_size > umh->allocated_peak) umh->allocated_peak = umh->allocated_size;
+	umh->largest_free_buf = gen_pool_largest_free_buf(umh->pool);
+
+}
+
+#endif /* CONFIG_ION_MONITOR */
+
 static int ion_unmapped_heap_debug_show(struct ion_heap *heap, struct seq_file *s, void *unused)
 {
-	struct ion_device *dev = heap->dev;
-	seq_puts(s, "\n----- ION UNMAPPED HEAP DEBUG SHOW -----\n");
+	#ifdef CONFIG_ION_MONITOR
+
+	if(!heap->debug_state) {
+		seq_puts(s, "\n ION monitor tool is disabled.\n");
+		return 0;
+	}
+
+	seq_puts(s, "\n----- ION UNMAPPED HEAP DEBUG -----\n");
+
+	struct ion_unmapped_heap *umh = to_unmapped_heap(heap);
+	size_t heap_frag = 0;
 	
+	if(heap->type == ION_HEAP_TYPE_UNMAPPED) {
+		update_unmapped_heap_info(heap);
+
+		heap_frag = ((umh->free_size - umh->largest_free_buf) * 100) / umh->free_size;
+
+		seq_printf(s, "%19s %19zu\n", "heap size", umh->size);
+		seq_printf(s, "%19s %19zu\n", "free size", umh->free_size);
+		seq_printf(s, "%19s %19zu\n", "allocated size", umh->allocated_size);
+		seq_printf(s, "%19s %19zu\n", "allocated peak", umh->allocated_peak);
+		seq_printf(s, "%19s %19zu\n", "largest free buffer", umh->largest_free_buf);
+		seq_printf(s, "%19s %19zu\n", "heap fragmentation", heap_frag);		
+	}
+	else {
+		pr_err("%s: Invalid heap type for debug: %d\n", __func__, heap->type);
+	}
+	seq_puts(s, "\n");
+	#endif /* CONFIG_ION_MONITOR */
 	return 0;
 }
 
@@ -261,11 +316,7 @@ struct ion_heap *ion_unmapped_heap_create(struct rmem_unmapped *heap_data)
 		return ERR_PTR(-ENOMEM);
 
 	// ensure memory address align to 64K which can meet VPU requirement.
-	#ifdef CONFIG_ION_MONITOR
-	unmapped_heap->pool = gen_pool_meta_create(PAGE_SHIFT+4, -1);
-	#else
 	unmapped_heap->pool = gen_pool_create(PAGE_SHIFT+4, -1);
-	#endif /* CONFIG_ION_MONITOR */
 
 	if (!unmapped_heap->pool) {
 		kfree(unmapped_heap);
@@ -277,11 +328,13 @@ struct ion_heap *ion_unmapped_heap_create(struct rmem_unmapped *heap_data)
 		     -1);
 	
 	#ifdef CONFIG_ION_MONITOR
-	struct gen_pool_meta *meta = 
-		container_of(unmapped_heap->pool, struct gen_pool_meta, pool);
-	set_meta(meta, HEAP_SIZE, heap_data->size);
-	set_meta(meta, LARGEST_FREE_BUF, heap_data->size);
-	set_meta(meta, FREE_SIZE, heap_data->size);
+
+	unmapped_heap->free_size = gen_pool_avail(unmapped_heap->pool);
+	unmapped_heap->allocated_size = unmapped_heap->size - unmapped_heap->free_size;
+	unmapped_heap->allocated_peak = unmapped_heap->allocated_size;
+	unmapped_heap->largest_free_buf = gen_pool_largest_free_buf(unmapped_heap->pool);
+	unmapped_heap->heap.debug_state = 1;
+
 	#endif /* CONFIG_ION_MONITOR */
 
 	unmapped_heap->heap.ops = &unmapped_heap_ops;
@@ -289,7 +342,7 @@ struct ion_heap *ion_unmapped_heap_create(struct rmem_unmapped *heap_data)
 	unmapped_heap->heap.flags = ION_HEAP_FLAG_DEFER_FREE;
 	unmapped_heap->heap.name = heap_data->name;
 	unmapped_heap->heap.debug_show = ion_unmapped_heap_debug_show;
-
+	
 	return &unmapped_heap->heap;
 }
 
@@ -315,14 +368,9 @@ static int ion_add_unmapped_heap(void)
 void ion_unmapped_heap_destroy(struct ion_heap *heap)
 {
 	struct ion_unmapped_heap *umh =
-	    container_of(heap, struct  ion_unmapped_heap, heap);
-	#ifdef CONFIG_ION_MONITOR
-	struct gen_pool_meta *meta =
-		container_of(umh->pool, struct gen_pool_meta, pool);
-	gen_pool_meta_destroy(meta);
-	#else     
+	    container_of(heap, struct  ion_unmapped_heap, heap);  
+
 	gen_pool_destroy(umh->pool);
-	#endif /* CONFIG_ION_MONITOR */
 	kfree(umh);
 	umh = NULL;
 }
@@ -362,110 +410,6 @@ static int __init rmem_unmapped_setup(struct reserved_mem *rmem)
 		return -EINVAL;
 	}
 }
-
-#ifdef CONFIG_ION_MONITOR
-/**
- *  get_unmapped_heap_meta - get a metadata value
- *  @heap: pointer to ion heap
- *  @name: name of the metadata to read
- *
- *  returns the requested metadata value
- */
-size_t get_unmapped_heap_meta(struct ion_heap *heap, int name)
-{
-	struct ion_unmapped_heap *unmapped_heap = 
-		container_of(heap, ion_unmapped_heap, heap);
-	struct gen_pool_meta *meta = 
-		container_of(unmapped_heap->pool, struct gen_pool_meta, pool);
-	return get_meta(meta, name);
-}
-
-/**
- * get_meta - get a metadata value
- * @meta: pointer to gen_pool_meta struct
- * @name: name of the metadata to read
- *
- * returns the requested metadata value
- */
-static size_t get_meta(struct gen_pool_meta *meta, int name) 
-{
-	size_t size;
-	switch(name) {
-		case HEAP_SIZE:
-			spin_lock(&meta->lock);
-			size = meta->heap_size;
-			spin_unlock(&meta->lock);
-			break;
-		case FREE_SIZE:
-			spin_lock(&meta->lock);
-			size = meta->free_size;
-			spin_unlock(&meta->lock);
-			break;
-		case ALLOCATED_SIZE:
-			spin_lock(&meta->lock);
-			size = meta->allocated_size;
-			spin_unlock(&meta->lock);
-			break;
-		case ALLOC_PEAK:
-			spin_lock(&meta->lock);
-			size = meta->alloc_peak;
-			spin_unlock(&meta->lock);
-			break;
-		case LARGEST_FREE_BUF:
-			spin_lock(&meta->lock);
-			size = meta->largest_free_buf;
-			spin_unlock(&meta->lock);
-			break;
-		default:
-			pr_err("%s: Invalid metadata name %d\n", __func__,
-					name);
-			return NULL;
-	}
-	return size;
-}
-
-/**
- * set_meta - set a metadata value
- * @meta: pointer to gen_pool_meta struct
- * @name: name of the metadata to modify
- * @size: value to set to the metadata
- *
- */
-static void set_meta(struct gen_pool_meta *meta, int name, size_t size) 
-{
-	switch(name) {
-		case HEAP_SIZE:
-			spin_lock(&meta->lock);
-			meta->heap_size = size;
-			spin_unlock(&meta->lock);
-			break;
-		case FREE_SIZE:
-			spin_lock(&meta->lock);
-			meta->free_size = size;
-			spin_unlock(&meta->lock);
-			break;
-		case ALLOCATED_SIZE:
-			spin_lock(&meta->lock);
-			meta->allocated_size = size;
-			spin_unlock(&meta->lock);
-			break;
-		case ALLOC_PEAK:
-			spin_lock(&meta->lock);
-			meta->alloc_peak = size;
-			spin_unlock(&meta->lock);
-			break;
-		case LARGEST_FREE_BUF:
-			spin_lock(&meta->lock);
-			meta->largest_free_buf = size;
-			spin_unlock(&meta->lock);
-			break;
-		default:
-			pr_err("%s: Invalid metadata name %d\n", __func__,
-					name);
-			return NULL;
-	}
-}
-#endif /* CONFIG_ION_MONITOR */
 
 RESERVEDMEM_OF_DECLARE(unmapped, "imx-secure-ion-pool", rmem_unmapped_setup);
 

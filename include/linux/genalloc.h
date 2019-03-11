@@ -34,6 +34,7 @@
 #include <linux/spinlock_types.h>
 #include <linux/atomic.h>
 
+
 struct device;
 struct device_node;
 struct gen_pool;
@@ -67,22 +68,6 @@ struct gen_pool {
 	const char *name;
 };
 
-#ifdef CONFIG_ION_MONITOR
-/*
- *  Metadata for General purpose special memory pool descriptor.
- */
-struct gen_pool_meta { 
-	spinlock_t lock;
-	struct gen_pool pool;
-	size_t heap_size;
-	size_t free_size;
-	size_t allocated_size;	
-	size_t largest_free_buf;
-	size_t alloc_peak;
-	genpool_algo_t algo;
-};
-#endif /* CONFIG_ION_MONITOR
-
 /*
  *  General purpose special memory pool chunk descriptor.
  */
@@ -94,6 +79,12 @@ struct gen_pool_chunk {
 	unsigned long end_addr;		/* end address of memory chunk (inclusive) */
 	unsigned long bits[0];		/* bitmap for allocating memory chunk */
 };
+
+#ifdef CONFIG_ION_MONITOR
+
+extern size_t gen_pool_largest_free_buf(struct gen_pool *pool);
+
+#endif /* CONFIG_ION_MONITOR
 
 /*
  *  gen_pool data descriptor for gen_pool_first_fit_align.

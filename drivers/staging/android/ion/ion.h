@@ -188,6 +188,10 @@ struct ion_heap {
 	wait_queue_head_t waitqueue;
 	struct task_struct *task;
 
+	#ifdef CONFIG_ION_MONITOR
+	size_t debug_state;
+	#endif /* CONFIG_ION_MONITOR */
+
 	int (*debug_show)(struct ion_heap *heap, struct seq_file *, void *);
 };
 
@@ -357,17 +361,5 @@ int ion_page_pool_shrink(struct ion_page_pool *pool, gfp_t gfp_mask,
 long ion_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
 
 int ion_query_heaps(struct ion_heap_query *query);
-
-#ifdef CONFIG_ION_MONITOR
-enum meta_name {
-	HEAP_SIZE,
-	FREE_SIZE,
-	ALLOCATED_SIZE,
-	ALLOC_PEAK,
-	LARGEST_FREE_BUF,
-};
-
-size_t get_unmapped_heap_meta(struct ion_heap *heap, int name);
-#endif /* CONFIG_ION_MONITOR */
 
 #endif /* _ION_H */

@@ -2,6 +2,16 @@ menu "Kernel hacking"
 
 source "lib/Kconfig.debug"
 
+config ION_MONITOR
+	bool "Enable ion monitor tool"
+	help
+	  Enabling this option will build the ion monitor tool.
+	  The tool is based on debugfs structure. Each ion heap allocated
+	  will be linked to a debugfs file in /sys/kernel/debug/ion/.
+	  A simple "cat" on the file will trigger a debug function that will
+	  give some informations about the current ion heap.
+	  This tool is useful for debug before production releases.
+
 config ARM64_PTDUMP_CORE
 	def_bool n
 

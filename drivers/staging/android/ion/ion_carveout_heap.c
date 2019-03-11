@@ -29,6 +29,8 @@
 
 #define ION_CARVEOUT_ALLOCATE_FAIL	-1
 
+#define to_carveout_heap(x) container_of(x, struct ion_carveout_heap, heap)
+
 struct rmem_carveout {
 	phys_addr_t base;
 	phys_addr_t size;
@@ -39,6 +41,13 @@ struct ion_carveout_heap {
 	struct ion_heap heap;
 	struct gen_pool *pool;
 	phys_addr_t base;
+	#ifdef CONFIG_ION_MONITOR
+	size_t size;
+	size_t free_size;
+	size_t allocated_size;
+	size_t allocated_peak;
+	size_t largest_free_buf;
+	#endif /* CONFIG_ION_MONITOR */
 };
 
 static phys_addr_t ion_carveout_allocate(struct ion_heap *heap,
@@ -121,6 +130,59 @@ static struct ion_heap_ops carveout_heap_ops = {
 	.unmap_kernel = ion_heap_unmap_kernel,
 };
 
+#ifdef CONFIG_ION_MONITOR
+
+/**
+ * update_carveout_heap_info - Update the debug info of the heap
+ * @heap: ion heap
+ */
+static void update_carveout_heap_info(struct ion_heap *heap)
+{
+	struct ion_carveout_heap *carveout_heap = to_carveout_heap(heap);
+
+	carveout_heap->free_size = gen_pool_avail(carveout_heap->pool);
+	carveout_heap->allocated_size = carveout_heap->size - carveout_heap->free_size;
+	if(carveout_heap->allocated_size > carveout_heap->allocated_peak) carveout_heap->allocated_peak = carveout_heap->allocated_size;
+	carveout_heap->largest_free_buf = gen_pool_largest_free_buf(carveout_heap->pool);
+
+}
+
+#endif /* CONFIG_ION_MONITOR */
+
+static int ion_carveout_heap_debug_show(struct ion_heap *heap, struct seq_file *s, void *unused)
+{
+	#ifdef CONFIG_ION_MONITOR
+
+	if(!heap->debug_state) {
+		seq_puts(s, "\n ION monitor tool is disabled.\n");
+		return 0;
+	}
+
+	seq_puts(s, "\n----- ION CARVEOUT HEAP DEBUG -----\n");
+
+	struct ion_carveout_heap *carveout_heap = to_carveout_heap(heap);
+	size_t heap_frag = 0;
+	
+	if(heap->type == ION_HEAP_TYPE_CARVEOUT) {
+		update_carveout_heap_info(heap);
+
+		heap_frag = ((carveout_heap->free_size - carveout_heap->largest_free_buf) * 100) / carveout_heap->free_size;
+
+		seq_printf(s, "%19s %19zu\n", "heap size", carveout_heap->size);
+		seq_printf(s, "%19s %19zu\n", "free size", carveout_heap->free_size);
+		seq_printf(s, "%19s %19zu\n", "allocated size", carveout_heap->allocated_size);
+		seq_printf(s, "%19s %19zu\n", "allocated peak", carveout_heap->allocated_peak);
+		seq_printf(s, "%19s %19zu\n", "largest free buffer", carveout_heap->largest_free_buf);
+		seq_printf(s, "%19s %19zu\n", "heap fragmentation", heap_frag);		
+	}
+	else {
+		pr_err("%s: Invalid heap type for debug: %d\n", __func__, heap->type);
+	}
+	seq_puts(s, "\n");
+	#endif /* CONFIG_ION_MONITOR */
+	return 0;
+}
+
 struct ion_heap *ion_carveout_heap_create(struct rmem_carveout *heap_data)
 {
 	struct ion_carveout_heap *carveout_heap;
@@ -152,6 +214,18 @@ struct ion_heap *ion_carveout_heap_create(struct rmem_carveout *heap_data)
 	carveout_heap->heap.ops = &carveout_heap_ops;
 	carveout_heap->heap.type = ION_HEAP_TYPE_CARVEOUT;
 	carveout_heap->heap.flags = ION_HEAP_FLAG_DEFER_FREE;
+	carveout_heap->heap.debug_show = ion_carveout_heap_debug_show;
+
+	#ifdef CONFIG_ION_MONITOR
+	
+	carveout_heap->size = size;
+	carveout_heap->free_size = gen_pool_avail(carveout_heap->pool);
+	carveout_heap->allocated_size = carveout_heap->size - carveout_heap->free_size;
+	carveout_heap->allocated_peak = carveout_heap->allocated_size;
+	carveout_heap->largest_free_buf = gen_pool_largest_free_buf(carveout_heap->pool);
+	carveout_heap->heap.debug_state = 1;
+
+	#endif /* CONFIG_ION_MONITOR */
 
 	return &carveout_heap->heap;
 }
