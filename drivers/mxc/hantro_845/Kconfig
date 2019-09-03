@@ -3,10 +3,11 @@
 #
 
 menu "MXC HANTRO(Video Processing Unit) 845 support"
-	depends on ARCH_FSL_IMX8MQ
+	depends on ARCH_FSL_IMX8MQ && TEE && OPTEE
 
 config MXC_HANTRO_845
 	tristate "Support for MXC HANTRO(Video Processing Unit) 845"
+	depends on TEE && OPTEE
 	default y
 	---help---
 	  VPU codec device.
