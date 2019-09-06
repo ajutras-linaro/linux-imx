@@ -58,6 +58,7 @@
 
 #define PTA_HANTRO_VPU_CMD_WRITE	0
 #define PTA_HANTRO_VPU_CMD_READ		1
+#define PTA_HANTRO_VPU_CMD_WAIT		2
 
 typedef struct {
 	uint32_t timeLow;
@@ -434,7 +435,7 @@ static void hantro_hwregs_write(hantrodec_t *dev,
 
 		ret = tee_client_invoke_func(dev->ctx, &inv_arg, param);
 		if ((ret < 0) || inv_arg.ret) {
-			pr_err("PTA_hantro_hwregs_CMD_WRITE invoke function err: 0x%08X 0x%08X\n",
+			pr_err("PTA_HANTRO_VPU_CMD_WRITE invoke function err: 0x%08X 0x%08X\n",
 			       ret,inv_arg.ret);
 			return;
 		}
@@ -467,7 +468,7 @@ static uint32_t hantro_hwregs_read(hantrodec_t *dev,
 
 		ret = tee_client_invoke_func(dev->ctx, &inv_arg, param);
 		if ((ret < 0) || inv_arg.ret) {
-			pr_err("PTA_hantro_hwregs_CMD_READ invoke function err: 0x%08X 0x%08X\n",
+			pr_err("PTA_HANTRO_VPU_CMD_READ invoke function err: 0x%08X 0x%08X\n",
 			       ret,inv_arg.ret);
 			return 0;
 		}
@@ -958,17 +959,43 @@ static long WaitDecReadyAndRefreshRegs(hantrodec_t *dev, struct core_desc *Core)
 
 	PDEBUG("wait_event_interruptible DEC[%d]\n", dev->core_id);
 
-	//ret = wait_event_interruptible_timeout(dec_wait_queue, CheckDecIrq(dev), msecs_to_jiffies(200));
-	ret = wait_event_timeout(dec_wait_queue, CheckDecIrq(dev), msecs_to_jiffies(200));
-	if (ret == -ERESTARTSYS) {
-		pr_err("DEC[%d]  failed to wait_event_interruptible interrupted\n", dev->core_id);
-		return -ERESTARTSYS;
-	} else if (ret == 0) {
-		pr_err("DEC[%d]  wait_event_interruptible timeout\n", dev->core_id);
-		dev->timeout = 1;
-	}
+	if (dev->session)
+	{
+		int ret = 0;
+		struct tee_ioctl_invoke_arg inv_arg;
+		struct tee_param param[4];
 
-	atomic_inc(&dev->irq_tx);
+		memset(&inv_arg, 0, sizeof(inv_arg));
+		memset(&param, 0, sizeof(param));
+
+		/* Invoke PTA_HANTRO_VPU_CMD_WRITE function */
+		inv_arg.func = PTA_HANTRO_VPU_CMD_WAIT;
+		inv_arg.session = dev->session;
+		inv_arg.num_params = 4;
+
+		/* Fill invoke cmd params */
+		param[0].attr = TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INPUT;
+		param[0].u.value.a = 200; // 200ms timeout
+
+		ret = tee_client_invoke_func(dev->ctx, &inv_arg, param);
+		if ((ret < 0) || inv_arg.ret) {
+			pr_err("PTA_HANTRO_VPU_CMD_WAIT invoke function err: 0x%08X 0x%08X\n",
+			       ret,inv_arg.ret);
+			return -EINVAL;
+		}		
+	} else {
+		//ret = wait_event_interruptible_timeout(dec_wait_queue, CheckDecIrq(dev), msecs_to_jiffies(200));
+		ret = wait_event_timeout(dec_wait_queue, CheckDecIrq(dev), msecs_to_jiffies(200));
+		if (ret == -ERESTARTSYS) {
+			pr_err("DEC[%d]  failed to wait_event_interruptible interrupted\n", dev->core_id);
+			return -ERESTARTSYS;
+		} else if (ret == 0) {
+			pr_err("DEC[%d]  wait_event_interruptible timeout\n", dev->core_id);
+			dev->timeout = 1;
+		}
+
+		atomic_inc(&dev->irq_tx);
+	}
 
 	/* refresh registers */
 	return DecRefreshRegs(dev, Core);
@@ -1130,14 +1157,42 @@ static int CheckCoreIrq(const struct file *filp, int *id)
 
 static long WaitCoreReady(const struct file *filp, int *id)
 {
+	hantrodec_t *dev = (hantrodec_t *) &hantrodec_data[*id];
+
 	PDEBUG("wait_event_interruptible CORE\n");
 
-	if (wait_event_interruptible(dec_wait_queue, CheckCoreIrq(filp, id))) {
-		pr_err("CORE  failed to wait_event_interruptible interrupted\n");
-		return -ERESTARTSYS;
-	}
+	if (dev->session)
+	{
+		int ret = 0;
+		struct tee_ioctl_invoke_arg inv_arg;
+		struct tee_param param[4];
 
-	atomic_inc(&hantrodec_data[*id].irq_tx);
+		memset(&inv_arg, 0, sizeof(inv_arg));
+		memset(&param, 0, sizeof(param));
+
+		/* Invoke PTA_HANTRO_VPU_CMD_WRITE function */
+		inv_arg.func = PTA_HANTRO_VPU_CMD_WAIT;
+		inv_arg.session = dev->session;
+		inv_arg.num_params = 4;
+
+		/* Fill invoke cmd params */
+		param[0].attr = TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INPUT;
+		param[0].u.value.a = 200; // 200ms timeout
+
+		ret = tee_client_invoke_func(dev->ctx, &inv_arg, param);
+		if ((ret < 0) || inv_arg.ret) {
+			pr_err("PTA_HANTRO_VPU_CMD_WAIT invoke function err: 0x%08X 0x%08X\n",
+			       ret,inv_arg.ret);
+			return -EINVAL;
+		}		
+	} else {
+		if (wait_event_interruptible(dec_wait_queue, CheckCoreIrq(filp, id))) {
+			pr_err("CORE  failed to wait_event_interruptible interrupted\n");
+			return -ERESTARTSYS;
+		}
+
+		atomic_inc(&dev->irq_tx);
+	}
 
 	return 0;
 }
@@ -1713,6 +1768,7 @@ static int hantrodec_init(struct platform_device *pdev, int id)
 	/* reset hardware */
 	ResetAsic(dev);
 
+#if 0
 	/* register irq for each core*/
 	irq = platform_get_irq_byname(pdev, "irq_hantro");
 	if (irq > 0) {
@@ -1734,10 +1790,10 @@ static int hantrodec_init(struct platform_device *pdev, int id)
 		pr_err("hantrodec: IRQ0 not in use!\n");
 		goto err;
 	}
-
 	dev->irq_rx.counter = 0;
 	dev->irq_tx.counter = 0;
 	irq_set_status_flags(irq, IRQ_DISABLE_UNLAZY);
+#endif
 
 	memset(&sess_arg, 0, sizeof(sess_arg));
 	memset(&param, 0, sizeof(param));
@@ -1930,7 +1986,6 @@ static irqreturn_t hantrodec_isr(int irq, void *dev_id)
 		if (irq_status_dec & HANTRODEC_DEC_IRQ) {
 			/* clear dec IRQ */
 			irq_status_dec &= (~HANTRODEC_DEC_IRQ);
-			//hantro_hwregs_write(dev,HANTRODEC_IRQ_STAT_DEC_OFF,irq_status_dec);
 			iowrite32(irq_status_dec, hwregs + HANTRODEC_IRQ_STAT_DEC_OFF);
 
 			PDEBUG("decoder IRQ received! Core %d\n", dev->core_id);
