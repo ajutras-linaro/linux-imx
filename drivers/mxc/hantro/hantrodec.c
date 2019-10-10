@@ -49,6 +49,12 @@
 #include <linux/clk.h>
 #include <linux/busfreq-imx.h>
 
+#include <linux/delay.h>
+
+#ifdef CONFIG_MXC_HANTRO_SECURE
+#include <hantrodec_secure.h>
+#endif
+
 #ifdef CONFIG_DEVICE_THERMAL
 #include <linux/device_cooling.h>
 #define HANTRO_REG_THERMAL_NOTIFIER(a) register_devfreq_cooling_notifier(a)
@@ -163,6 +169,11 @@ static int hantrodec_major; /* dynamic allocation */
 
 /* here's all the must remember stuff */
 typedef struct {
+#ifdef CONFIG_MXC_HANTRO_SECURE
+	struct tee_context *ctx[HXDEC_MAX_CORES];
+ 	uint32_t session[HXDEC_MAX_CORES];
+	struct tee_shm* shm[HXDEC_MAX_CORES];
+#endif
 	char *buffer;
 	unsigned int iosize[HXDEC_MAX_CORES];
 	volatile u8 *hwregs[HXDEC_MAX_CORES];
@@ -184,12 +195,14 @@ static void ResetAsic(hantrodec_t *dev);
 static void dump_regs(hantrodec_t *dev);
 #endif
 
-/* IRQ handler */
-static irqreturn_t hantrodec_isr(int irq, void *dev_id);
-
 static u32 dec_regs[HXDEC_MAX_CORES][DEC_IO_SIZE_MAX/4];
 struct semaphore dec_core_sem;
 struct semaphore pp_core_sem;
+
+#ifndef CONFIG_MXC_HANTRO_SECURE
+/* IRQ handler */
+static irqreturn_t hantrodec_isr(int irq, void *dev_id);
+#endif
 
 static int dec_irq;
 static int pp_irq;
@@ -282,17 +295,40 @@ static int hantro_clk_disable(struct device *dev)
 
 static int hantro_ctrlblk_reset(struct device *dev)
 {
-	volatile u8 *iobase;
-
 	//config G1/G2
 	hantro_clk_enable(dev);
-	iobase = (volatile u8 *)ioremap_nocache(BLK_CTL_BASE, 0x10000);
-	iowrite32(0x3, iobase);  //VPUMIX G1/G2 block soft reset  control
-	iowrite32(0x3, iobase+4); //VPUMIX G1/G2 block clock enable control
-	iowrite32(0xFFFFFFFF, iobase + 0x8); // all G1 fuse dec enable
-	iowrite32(0xFFFFFFFF, iobase + 0xC); // all G1 fuse pp enable
-	iowrite32(0xFFFFFFFF, iobase + 0x10); // all G2 fuse dec enable
-	iounmap(iobase);
+#ifdef CONFIG_MXC_HANTRO_SECURE
+	struct tee_context *ctx = NULL;
+	uint32_t session = 0;
+
+	ctx = hantro_secure_open_context();
+	if (ctx)
+		session = hantro_secure_open(ctx,0xFFFFFFFF);
+
+	if (session)
+	{
+		hantro_secure_regs_write(ctx,session, 0, 0x3);  //VPUMIX G1/G2 block soft reset  control
+		hantro_secure_regs_write(ctx,session, 0x4, 0x3);  //VPUMIX G1/G2 block clock enable control
+
+		hantro_secure_regs_write(ctx,session, 0x8, 0xFFFFFFFF); // all G1 fuse dec enable
+		hantro_secure_regs_write(ctx,session, 0xC, 0xFFFFFFFF);  // all G1 fuse pp enable
+		hantro_secure_regs_write(ctx,session, 0x10, 0xFFFFFFFF);  // all G2 fuse dec enable
+		tee_client_close_session(ctx,session);
+		tee_client_close_context(ctx);
+	}
+	else
+#endif
+	{
+		volatile u8 *iobase;
+
+		iobase = (volatile u8 *)ioremap_nocache(BLK_CTL_BASE, 0x10000);
+		iowrite32(0x3, iobase);  //VPUMIX G1/G2 block soft reset  control
+		iowrite32(0x3, iobase+4); //VPUMIX G1/G2 block clock enable control
+		iowrite32(0xFFFFFFFF, iobase + 0x8); // all G1 fuse dec enable
+		iowrite32(0xFFFFFFFF, iobase + 0xC); // all G1 fuse pp enable
+		iowrite32(0xFFFFFFFF, iobase + 0x10); // all G2 fuse dec enable
+		iounmap(iobase);
+	}
 	hantro_clk_disable(dev);
 	return 0;
 }
@@ -348,6 +384,36 @@ static struct notifier_block hantro_thermal_hot_notifier = {
 };
 #endif  //CONFIG_DEVICE_THERMAL
 
+static void hantro_hwregs_write(hantrodec_t *dev,
+		       uint32_t Core, uint32_t offset, uint32_t value)
+{
+#ifdef CONFIG_MXC_HANTRO_SECURE
+	if (dev->session[Core])
+	{
+		hantro_secure_regs_write(dev->ctx[Core],dev->session[Core],offset,value);
+	}
+	else
+#endif
+	{
+		iowrite32(value, dev->hwregs[Core] + offset);
+	}
+}
+
+static uint32_t hantro_hwregs_read(hantrodec_t *dev,
+		       uint32_t Core, uint32_t offset)
+{
+#ifdef CONFIG_MXC_HANTRO_SECURE
+	if (dev->session[Core])
+	{
+		return hantro_secure_regs_read(dev->ctx[Core],dev->session[Core],offset);
+	}
+	else
+#endif
+	{
+		return ioread32(dev->hwregs[Core] + offset);
+	}
+}
+
 static void ReadCoreConfig(hantrodec_t *dev)
 {
 	int c;
@@ -358,7 +424,7 @@ static void ReadCoreConfig(hantrodec_t *dev)
 	for (c = 0; c < dev->cores; c++) {
 		/* Decoder configuration */
 		if (IS_G1(dev->hw_id[c])) {
-			reg = ioread32(dev->hwregs[c] + HANTRODEC_SYNTH_CFG * 4);
+			reg = hantro_hwregs_read(dev,c,HANTRODEC_SYNTH_CFG * 4);
 
 			tmp = (reg >> DWL_H264_E) & 0x3U;
 			if (tmp)
@@ -390,7 +456,7 @@ static void ReadCoreConfig(hantrodec_t *dev)
 				pr_debug("hantrodec: Core[%d] has VP6\n", c);
 			cfg[c] |= tmp ? 1 << DWL_CLIENT_TYPE_VP6_DEC : 0;
 
-			reg = ioread32(dev->hwregs[c] + HANTRODEC_SYNTH_CFG_2 * 4);
+			reg = hantro_hwregs_read(dev,c,HANTRODEC_SYNTH_CFG_2 * 4);
 
 			/* VP7 and WEBP is part of VP8 */
 			mask =  (1 << DWL_VP8_E) | (1 << DWL_VP7_E) | (1 << DWL_WEBP_E);
@@ -414,9 +480,9 @@ static void ReadCoreConfig(hantrodec_t *dev)
 			cfg[c] |= tmp ? 1 << DWL_CLIENT_TYPE_RV_DEC : 0;
 
 			/* Post-processor configuration */
-			//reg = ioread32(dev->hwregs[c] + HANTROPP_SYNTH_CFG * 4);
+			//reg = hantro_hwregs_read(dev,c,HANTROPP_SYNTH_CFG * 4);
 		} else {
-			reg = ioread32(dev->hwregs[c] + HANTRODEC_SYNTH_CFG_2 * 4);
+			reg = hantro_hwregs_read(dev,c,HANTRODEC_SYNTH_CFG_2 * 4);
 
 			tmp = (reg >> DWL_HEVC_E) & 0x3U;
 			if (tmp)
@@ -430,7 +496,7 @@ static void ReadCoreConfig(hantrodec_t *dev)
 		}
 
 		/* Post-processor configuration */
-		reg = ioread32(dev->hwregs[c] + HANTRODECPP_SYNTH_CFG * 4);
+		reg = hantro_hwregs_read(dev,c,HANTRODECPP_SYNTH_CFG * 4);
 
 		tmp = (reg >> DWL_PP_E) & 0x01U;
 		if (tmp)
@@ -499,10 +565,29 @@ int GetDecCoreID(hantrodec_t *dev, struct file *filp,
 
 static int hantrodec_choose_core(int is_g1)
 {
+	PDEBUG("hantrodec_choose_core\n");
+
+#ifdef CONFIG_MXC_HANTRO_SECURE
+	struct tee_context *ctx = hantrodec_data.ctx[(is_g1?0:1)];
+	uint32_t session;
+	
+	session = hantro_secure_open(ctx,0xFFFFFFFF);
+	if (session)
+	{
+		if (is_g1)
+		{
+			hantro_secure_regs_write(ctx,session,0x14,0x1); // VPUMIX only use G1
+		} else {
+			hantro_secure_regs_write(ctx,session,0x14,0x0); // VPUMIX only use G2
+		}
+		tee_client_close_session(ctx,session);
+	}
+
+#else
+
 	volatile unsigned char *reg = NULL;
 	unsigned int blk_base = BLK_CTL_BASE;
 
-	PDEBUG("hantrodec_choose_core\n");
 	if (!request_mem_region(blk_base, 0x1000, "blk_ctl"))	{
 		pr_err("blk_ctl: failed to reserve HW regs\n");
 		return -EBUSY;
@@ -525,6 +610,8 @@ static int hantrodec_choose_core(int is_g1)
 	if (reg)
 		iounmap((void *)reg);
 	release_mem_region(blk_base, 0x1000);
+#endif
+
 	PDEBUG("hantrodec_choose_core OK!\n");
 	return 0;
 }
@@ -567,7 +654,7 @@ void ReleaseDecoder(hantrodec_t *dev, long Core)
 	u32 status;
 	unsigned long flags;
 
-	status = ioread32(dev->hwregs[Core] + HANTRODEC_IRQ_STAT_DEC_OFF);
+	status = hantro_hwregs_read(dev,Core,HANTRODEC_IRQ_STAT_DEC_OFF);
 
 	/* make sure HW is disabled */
 	if (status & HANTRODEC_DEC_E) {
@@ -575,7 +662,7 @@ void ReleaseDecoder(hantrodec_t *dev, long Core)
 
 		/* abort decoder */
 		status |= HANTRODEC_DEC_ABORT | HANTRODEC_DEC_IRQ_DISABLE;
-		iowrite32(status, dev->hwregs[Core] + HANTRODEC_IRQ_STAT_DEC_OFF);
+		hantro_hwregs_write(dev,Core,HANTRODEC_IRQ_STAT_DEC_OFF,status);
 	}
 
 	spin_lock_irqsave(&owner_lock, flags);
@@ -612,8 +699,9 @@ long ReservePostProcessor(hantrodec_t *dev, struct file *filp)
 void ReleasePostProcessor(hantrodec_t *dev, long Core)
 {
 	unsigned long flags;
+	u32 status;
 
-	u32 status = ioread32(dev->hwregs[Core] + HANTRO_IRQ_STAT_PP_OFF);
+	status = hantro_hwregs_read(dev,Core,HANTRO_IRQ_STAT_PP_OFF);
 
 	/* make sure HW is disabled */
 	if (status & HANTRO_PP_E) {
@@ -624,7 +712,7 @@ void ReleasePostProcessor(hantrodec_t *dev, long Core)
 
 		/* disable postprocessor */
 		status &= (~HANTRO_PP_E);
-		iowrite32(0x10, dev->hwregs[Core] + HANTRO_IRQ_STAT_PP_OFF);
+		hantro_hwregs_write(dev,Core,HANTRO_IRQ_STAT_PP_OFF,0x10);
 	}
 
 	spin_lock_irqsave(&owner_lock, flags);
@@ -698,11 +786,25 @@ long DecFlushRegs(hantrodec_t *dev, struct core_desc *Core)
 
 		/* write dec regs but the status reg[1] to hardware */
 		/* both original and extended regs need to be written */
-		for (i = 2; i <= HANTRO_DEC_ORG_LAST_REG; i++)
-			iowrite32(dec_regs[id][i], dev->hwregs[id] + i*4);
+#ifdef CONFIG_MXC_HANTRO_SECURE
+		if (dev->shm[id])
+			hantro_hwregs_write_multiple(dev->ctx[id],dev->shm[id],dev->session[id],2*4,dec_regs[id],HANTRO_DEC_ORG_LAST_REG*4);
+		else
+#endif
+		{
+			for (i = 2; i <= HANTRO_DEC_ORG_LAST_REG; i++)
+				iowrite32(dec_regs[id][i], dev->hwregs[id] + i*4);
+		}
 #ifdef USE_64BIT_ENV
-		for (i = HANTRO_DEC_EXT_FIRST_REG; i <= HANTRO_DEC_EXT_LAST_REG; i++)
-			iowrite32(dec_regs[id][i], dev->hwregs[id] + i*4);
+#ifdef CONFIG_MXC_HANTRO_SECURE
+		if (dev->shm[id])
+			hantro_hwregs_write_multiple(dev->ctx[id],dev->shm[id],dev->session[id],HANTRO_DEC_EXT_FIRST_REG*4,dec_regs[id],HANTRO_DEC_ORG_LAST_REG*4);
+		else
+#endif
+		{
+			for (i = HANTRO_DEC_EXT_FIRST_REG; i <= HANTRO_DEC_EXT_LAST_REG; i++)
+				iowrite32(dec_regs[id][i], dev->hwregs[id] + i*4);
+		}
 #endif
 	} else {
 		ret = copy_from_user(dec_regs[id], Core->regs, HANTRO_G2_DEC_REGS*4);
@@ -711,13 +813,20 @@ long DecFlushRegs(hantrodec_t *dev, struct core_desc *Core)
 			return -EFAULT;
 		}
 
-		/* write all regs but the status reg[1] to hardware */
-		for (i = 2; i <= HANTRO_G2_DEC_LAST_REG; i++)
-			iowrite32(dec_regs[id][i], dev->hwregs[id] + i*4);
+#ifdef CONFIG_MXC_HANTRO_SECURE
+		if (dev->shm[id])
+			hantro_hwregs_write_multiple(dev->ctx[id],dev->shm[id],dev->session[id],2*4,dec_regs[id],HANTRO_G2_DEC_LAST_REG*4);
+		else
+#endif
+		{
+			/* write all regs but the status reg[1] to hardware */
+			for (i = 2; i <= HANTRO_G2_DEC_LAST_REG; i++)
+				iowrite32(dec_regs[id][i], dev->hwregs[id] + i*4);
+		}
 	}
 
 	/* write the status register, which may start the decoder */
-	iowrite32(dec_regs[id][1], dev->hwregs[id] + 4);
+	hantro_hwregs_write(dev,id,4,dec_regs[id][1]);
 
 	PDEBUG("flushed registers on Core %d\n", id);
 
@@ -737,10 +846,10 @@ long DecRefreshRegs(hantrodec_t *dev, struct core_desc *Core)
 		/* read all registers from hardware */
 		/* both original and extended regs need to be read */
 		for (i = 0; i <= HANTRO_DEC_ORG_LAST_REG; i++)
-			dec_regs[id][i] = ioread32(dev->hwregs[id] + i*4);
+			dec_regs[id][i] = hantro_hwregs_read(dev,id, i*4);
 #ifdef USE_64BIT_ENV
 		for (i = HANTRO_DEC_EXT_FIRST_REG; i <= HANTRO_DEC_EXT_LAST_REG; i++)
-			dec_regs[id][i] = ioread32(dev->hwregs[id] + i*4);
+			dec_regs[id][i] = hantro_hwregs_read(dev,id, i*4);
 #endif
 
 		if (timeout) {
@@ -770,7 +879,7 @@ long DecRefreshRegs(hantrodec_t *dev, struct core_desc *Core)
 
 		/* read all registers from hardware */
 		for (i = 0; i <= HANTRO_G2_DEC_LAST_REG; i++)
-			dec_regs[id][i] = ioread32(dev->hwregs[id] + i*4);
+			dec_regs[id][i] = hantro_hwregs_read(dev,id, i*4);
 
 		if (timeout) {
 			/* Enable TIMEOUT bits in Reg[1] */
@@ -817,17 +926,27 @@ long WaitDecReadyAndRefreshRegs(hantrodec_t *dev, struct core_desc *Core)
 
 	PDEBUG("wait_event_interruptible DEC[%d]\n", id);
 
-	//ret = wait_event_interruptible_timeout(dec_wait_queue, CheckDecIrq(dev, id), msecs_to_jiffies(200));
-	ret = wait_event_timeout(dec_wait_queue, CheckDecIrq(dev, id), msecs_to_jiffies(200));
-	if (ret == -ERESTARTSYS) {
-		pr_err("DEC[%d]  failed to wait_event interrupted\n", id);
-		return -ERESTARTSYS;
-	} else if (ret == 0) {
-		pr_err("DEC[%d]  wait_event timeout\n", id);
-		timeout = 1;
+#ifdef CONFIG_MXC_HANTRO_SECURE
+	if (dev->session)
+	{
+		if (hantro_secure_wait(dev->ctx[id],dev->session[id]))
+			return -EINVAL;
 	}
+	else
+#endif
+	{
+		//ret = wait_event_interruptible_timeout(dec_wait_queue, CheckDecIrq(dev, id), msecs_to_jiffies(200));
+		ret = wait_event_timeout(dec_wait_queue, CheckDecIrq(dev, id), msecs_to_jiffies(200));
+		if (ret == -ERESTARTSYS) {
+			pr_err("DEC[%d]  failed to wait_event interrupted\n", id);
+			return -ERESTARTSYS;
+		} else if (ret == 0) {
+			pr_err("DEC[%d]  wait_event timeout\n", id);
+			timeout = 1;
+		}
 
-	atomic_inc(&irq_tx);
+		atomic_inc(&irq_tx);
+	}
 
 	/* refresh registers */
 	return DecRefreshRegs(dev, Core);
@@ -854,15 +973,28 @@ long PPFlushRegs(hantrodec_t *dev, struct core_desc *Core)
 
 	/* write all regs but the status reg[1] to hardware */
 	/* both original and extended regs need to be written */
-	for (i = HANTRO_PP_ORG_FIRST_REG + 1; i <= HANTRO_PP_ORG_LAST_REG; i++)
-		iowrite32(dec_regs[id][i], dev->hwregs[id] + i*4);
+#ifdef CONFIG_MXC_HANTRO_SECURE
+	if (dev->shm[id])
+		hantro_hwregs_write_multiple(dev->ctx[id],dev->shm[id],dev->session[id],(HANTRO_PP_ORG_FIRST_REG+1)*4,dec_regs[id],HANTRO_PP_ORG_LAST_REG*4);
+	else
+#endif
+	{
+		for (i = HANTRO_PP_ORG_FIRST_REG + 1; i <= HANTRO_PP_ORG_LAST_REG; i++)
+			iowrite32(dec_regs[id][i], dev->hwregs[id] + i*4);
+	}
 #ifdef USE_64BIT_ENV
-	for (i = HANTRO_PP_EXT_FIRST_REG; i <= HANTRO_PP_EXT_LAST_REG; i++)
-		iowrite32(dec_regs[id][i], dev->hwregs[id] + i*4);
+#ifdef CONFIG_MXC_HANTRO_SECURE
+	if (dev->shm[id])
+		hantro_hwregs_write_multiple(dev->ctx[id],dev->shm[id],dev->session[id],HANTRO_PP_EXT_FIRST_REG*4,dec_regs[id],HANTRO_PP_EXT_LAST_REG*4);
+	else
+#endif
+	{
+		for (i = HANTRO_PP_EXT_FIRST_REG; i <= HANTRO_PP_EXT_LAST_REG; i++)
+			iowrite32(dec_regs[id][i], dev->hwregs[id] + i*4);
+	}
 #endif
 	/* write the stat reg, which may start the PP */
-	iowrite32(dec_regs[id][HANTRO_PP_ORG_FIRST_REG],
-	dev->hwregs[id] + HANTRO_PP_ORG_FIRST_REG * 4);
+	hantro_hwregs_write(dev,id,HANTRO_PP_ORG_FIRST_REG * 4,dec_regs[id][HANTRO_PP_ORG_FIRST_REG]);
 
 	return 0;
 }
@@ -884,10 +1016,10 @@ long PPRefreshRegs(hantrodec_t *dev, struct core_desc *Core)
 	/* read all registers from hardware */
 	/* both original and extended regs need to be read */
 	for (i = HANTRO_PP_ORG_FIRST_REG; i <= HANTRO_PP_ORG_LAST_REG; i++)
-		dec_regs[id][i] = ioread32(dev->hwregs[id] + i*4);
+		dec_regs[id][i] = hantro_hwregs_read(dev,id, i*4);
 #ifdef USE_64BIT_ENV
 	for (i = HANTRO_PP_EXT_FIRST_REG; i <= HANTRO_PP_EXT_LAST_REG; i++)
-		dec_regs[id][i] = ioread32(dev->hwregs[id] + i*4);
+		dec_regs[id][i] = hantro_hwregs_read(dev,id, i*4);
 #endif
 	/* put registers to user space*/
 	/* put original registers to user space*/
@@ -988,12 +1120,22 @@ long WaitCoreReady(hantrodec_t *dev, const struct file *filp, int *id)
 {
 	PDEBUG("wait_event_interruptible CORE\n");
 
-	if (wait_event_interruptible(dec_wait_queue, CheckCoreIrq(dev, filp, id))) {
-		pr_err("CORE  failed to wait_event_interruptible interrupted\n");
-		return -ERESTARTSYS;
+#ifdef CONFIG_MXC_HANTRO_SECURE
+	if (dev->session)
+	{
+		if (hantro_secure_wait(dev->ctx[*id],dev->session[*id]))
+			return -EINVAL;
 	}
+	else
+#endif
+	{
+		if (wait_event_interruptible(dec_wait_queue, CheckCoreIrq(dev, filp, id))) {
+			pr_err("CORE  failed to wait_event_interruptible interrupted\n");
+			return -ERESTARTSYS;
+		}
 
-	atomic_inc(&irq_tx);
+		atomic_inc(&irq_tx);
+	}
 
 	return 0;
 }
@@ -1221,7 +1363,7 @@ static long hantrodec_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 		__get_user(id, (u32 *)arg);
 		if (id >= hantrodec_data.cores)
 			return -EFAULT;
-		id = ioread32(hantrodec_data.hwregs[id]);
+		id = hantro_hwregs_read(&hantrodec_data,id, 0);
 		__put_user(id, (u32 *) arg);
 		return 0;
 	}
@@ -1436,10 +1578,7 @@ static const struct file_operations hantrodec_fops = {
 int hantrodec_init(struct platform_device *pdev)
 {
 	int result;
-	int irq_0, irq_1;
 
-	dec_irq = 0;
-	pp_irq = 0;
 	pr_debug("hantrodec: Init multi Core[0] at 0x%16lx\n"
 			"                     Core[1] at 0x%16lx\n", multicorebase[0], multicorebase[1]);
 
@@ -1468,11 +1607,32 @@ int hantrodec_init(struct platform_device *pdev)
 	sema_init(&dec_core_sem, hantrodec_data.cores-1);
 	sema_init(&pp_core_sem, 1);
 
+#ifdef CONFIG_MXC_HANTRO_SECURE
+	int n;
+
+	for (n=0; n<hantrodec_data.cores; n++)
+	{
+		hantrodec_data.ctx[n] = hantro_secure_open_context();
+
+		if (hantrodec_data.ctx[n])
+		{
+			hantrodec_data.shm[n] = alloc_shm(hantrodec_data.ctx[n],DEC_IO_SIZE_MAX/4);
+			hantrodec_data.session[n] = hantro_secure_open(hantrodec_data.ctx[n],n);
+		}
+	}
+#endif
+
 	/* read configuration fo all cores */
 	ReadCoreConfig(&hantrodec_data);
 
 	/* reset hardware */
 	ResetAsic(&hantrodec_data);
+
+#ifndef CONFIG_MXC_HANTRO_SECURE
+	int irq_0, irq_1;
+
+	dec_irq = 0;
+	pp_irq = 0;
 
 	/* register irq for each core*/
 	irq_0 = platform_get_irq_byname(pdev, "irq_hantro_g1");
@@ -1517,6 +1677,8 @@ int hantrodec_init(struct platform_device *pdev)
 		pr_err("hantrodec: IRQ1 not in use!\n");
 		goto err;
 	}
+#endif
+
 	pr_info("hantrodec: module inserted. Major = %d\n", hantrodec_major);
 
 	return 0;
@@ -1548,6 +1710,19 @@ void hantrodec_cleanup(void)
 	}
 
 	ReleaseIO();
+
+#ifdef CONFIG_MXC_HANTRO_SECURE
+	for (n = 0; n < dev->cores; n++) {
+		if (dev->session[n])
+		{
+			tee_client_close_session(dev->ctx[n], dev->session[n]);
+		}
+		if (dev->shm[n])
+		{
+			release_shm(dev->shm[n]);
+		}
+	}
+#endif
 
 	unregister_chrdev(hantrodec_major, "hantrodec");
 
@@ -1652,6 +1827,7 @@ static void ReleaseIO(void)
 	}
 }
 
+#ifndef CONFIG_MXC_HANTRO_SECURE
 /*---------------------------------------------------------------------------
  *Function name   : hantrodec_isr
  *Description     : interrupt handler
@@ -1702,6 +1878,7 @@ irqreturn_t hantrodec_isr(int irq, void *dev_id)
 	(void)hwregs;
 	return IRQ_RETVAL(handled);
 }
+#endif
 
 /*---------------------------------------------------------------------------
  *Function name   : ResetAsic
@@ -1716,20 +1893,20 @@ void ResetAsic(hantrodec_t *dev)
 	u32 status;
 
 	for (j = 0; j < dev->cores; j++) {
-		status = ioread32(dev->hwregs[j] + HANTRODEC_IRQ_STAT_DEC_OFF);
+		status = hantro_hwregs_read(dev,j, HANTRODEC_IRQ_STAT_DEC_OFF);
 
 		if (status & HANTRODEC_DEC_E) {
 			/* abort with IRQ disabled */
 			status = HANTRODEC_DEC_ABORT | HANTRODEC_DEC_IRQ_DISABLE;
-			iowrite32(status, dev->hwregs[j] + HANTRODEC_IRQ_STAT_DEC_OFF);
+			hantro_hwregs_write(dev,j,HANTRODEC_IRQ_STAT_DEC_OFF,status);
 		}
 
 		if (IS_G1(dev->hw_id[j]))
 			/* reset PP */
-			iowrite32(0, dev->hwregs[j] + HANTRO_IRQ_STAT_PP_OFF);
+			hantro_hwregs_write(dev,j,HANTRO_IRQ_STAT_PP_OFF,0);
 
 		for (i = 4; i < dev->iosize[j]; i += 4)
-			iowrite32(0, dev->hwregs[j] + i);
+			hantro_hwregs_write(dev,j,i,0);
 	}
 }
 
@@ -1749,10 +1926,10 @@ void dump_regs(hantrodec_t *dev)
 	for (c = 0; c < dev->cores; c++) {
 		for (i = 0; i < dev->iosize[c]; i += 4*4) {
 			PDEBUG("\toffset %04X: %08X  %08X  %08X  %08X\n", i,
-			ioread32(dev->hwregs[c] + i),
-			ioread32(dev->hwregs[c] + i + 4),
-			ioread32(dev->hwregs[c] + i + 8),
-			ioread32(dev->hwregs[c] + i + 12));
+			hantro_hwregs_read(dev,c, i),
+			hantro_hwregs_read(dev,c, i + 4),
+			hantro_hwregs_read(dev,c, i + 8),
+			hantro_hwregs_read(dev,c, i + 12));
 		}
 	}
 	PDEBUG("Reg Dump End\n");
@@ -1853,6 +2030,19 @@ static int hantro_dev_remove(struct platform_device *pdev)
 
 #ifdef CONFIG_DEVICE_THERMAL
 	HANTRO_UNREG_THERMAL_NOTIFIER(&hantro_thermal_hot_notifier);
+#endif
+
+#ifdef CONFIG_MXC_HANTRO_SECURE
+	int n;
+
+	for (n=0;n<hantrodec_data.cores;n++)
+	{
+		if (hantrodec_data.ctx[n])
+		{
+			tee_client_close_context(hantrodec_data.ctx[n]);
+			hantrodec_data.ctx[n] = NULL;
+		}
+	}
 #endif
 
 	return 0;

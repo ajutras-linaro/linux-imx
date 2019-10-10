@@ -22,6 +22,7 @@ source "drivers/mxc/sim/Kconfig"
 if ARCH_MXC_ARM64
 source "drivers/mxc/hantro_845/Kconfig"
 source "drivers/mxc/hantro_845_h1/Kconfig"
+source "drivers/mxc/hantro_secure/Kconfig"
 source "drivers/mxc/vpu_legacy/Kconfig"
 source "drivers/mxc/vpu_malone/Kconfig"
 source "drivers/mxc/vpu_windsor/Kconfig"

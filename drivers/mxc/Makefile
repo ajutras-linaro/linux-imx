@@ -8,6 +8,7 @@ obj-$(CONFIG_MXC_MIPI_CSI2) += mipi/
 obj-$(CONFIG_MXC_HANTRO) += hantro/
 obj-$(CONFIG_MXC_HANTRO_845) += hantro_845/
 obj-$(CONFIG_MXC_HANTRO_845_H1) += hantro_845_h1/
+obj-$(CONFIG_MXC_HANTRO_SECURE) += hantro_secure/
 obj-$(CONFIG_MXC_VPU_LEGACY) += vpu_legacy/
 obj-$(CONFIG_MX8_HDP)	+= hdp/
 obj-$(CONFIG_IMX_HDP_CEC)	+= hdp-cec/

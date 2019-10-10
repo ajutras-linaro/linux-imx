@@ -1,0 +1,15 @@
+#
+# Codec configuration
+#
+
+menu "MXC HANTRO(Video Processing Unit) 845 support"
+	depends on ARCH_FSL_IMX8MQ
+
+config MXC_HANTRO_SECURE
+	tristate "Support for Secure VPU driver with OPTEE"
+	depends on TEE && OPTEE
+	default n
+	---help---
+	  VPU secure driver.
+
+endmenu

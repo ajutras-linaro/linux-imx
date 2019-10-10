@@ -51,9 +51,10 @@
 
 #include <linux/delay.h>
 
-#include "hantrodec_secure.h"
+#ifdef CONFIG_MXC_HANTRO_SECURE
+#include <hantrodec_secure.h>
+#endif
 
-#define CONFIG_HANTRO_SECURE
 //#define CONFIG_DEVICE_THERMAL_HANTRO
 #ifdef CONFIG_DEVICE_THERMAL_HANTRO
 #include <linux/device_cooling.h>
@@ -167,7 +168,7 @@ static int cores = 2;
 
 /* here's all the must remember stuff */
 typedef struct {
-#ifdef CONFIG_HANTRO_SECURE
+#ifdef CONFIG_MXC_HANTRO_SECURE
 	struct tee_context *ctx;
  	uint32_t session;
 	struct tee_shm* shm;
@@ -215,7 +216,7 @@ static void ResetAsic(hantrodec_t *dev);
 static void dump_regs(hantrodec_t *dev);
 #endif
 
-#ifndef CONFIG_HANTRO_SECURE
+#ifndef CONFIG_MXC_HANTRO_SECURE
 /* IRQ handler */
 static irqreturn_t hantrodec_isr(int irq, void *dev_id);
 #endif
@@ -282,7 +283,7 @@ static int hantro_ctrlblk_reset(hantrodec_t *dev)
 	//config G1/G2
 	hantro_clk_enable(&dev->clk);
 
-#ifdef CONFIG_HANTRO_SECURE
+#ifdef CONFIG_MXC_HANTRO_SECURE
 	uint32_t session;
 	
 	session = hantro_secure_open(dev->ctx,0xFFFFFFFF);
@@ -446,7 +447,7 @@ static struct notifier_block hantro_thermal_hot_notifier = {
 static void hantro_hwregs_write(hantrodec_t *dev,
 		       uint32_t offset, uint32_t value)
 {
-#ifdef CONFIG_HANTRO_SECURE
+#ifdef CONFIG_MXC_HANTRO_SECURE
 	if (dev->session)
 	{
 		hantro_secure_regs_write(dev->ctx,dev->session,offset,value);
@@ -461,7 +462,7 @@ static void hantro_hwregs_write(hantrodec_t *dev,
 static uint32_t hantro_hwregs_read(hantrodec_t *dev,
 		       uint32_t offset)
 {
-#ifdef CONFIG_HANTRO_SECURE
+#ifdef CONFIG_MXC_HANTRO_SECURE
 	if (dev->session)
 	{
 		return hantro_secure_regs_read(dev->ctx,dev->session,offset);
@@ -835,7 +836,7 @@ static long DecFlushRegs(hantrodec_t *dev, struct core_desc *Core)
 		/* write dec regs but the status reg[1] to hardware */
 		/* both original and extended regs need to be written */
 
-#ifdef CONFIG_HANTRO_SECURE
+#ifdef CONFIG_MXC_HANTRO_SECURE
 		if (dev->shm)
 			hantro_hwregs_write_multiple(dev->ctx,dev->shm,dev->session,2*4,dev->dec_regs,HANTRO_DEC_ORG_LAST_REG*4);
 		else
@@ -845,7 +846,7 @@ static long DecFlushRegs(hantrodec_t *dev, struct core_desc *Core)
 				hantro_hwregs_write(dev,i*4,dev->dec_regs[i]);
 		}
 #ifdef USE_64BIT_ENV
-#ifdef CONFIG_HANTRO_SECURE
+#ifdef CONFIG_MXC_HANTRO_SECURE
 		if (dev->shm)
 			hantro_hwregs_write_multiple(dev->ctx,dev->shm,dev->session,HANTRO_DEC_EXT_FIRST_REG*4,dev->dec_regs,HANTRO_DEC_ORG_LAST_REG*4);
 		else
@@ -863,7 +864,7 @@ static long DecFlushRegs(hantrodec_t *dev, struct core_desc *Core)
 		}
 
 		/* write all regs but the status reg[1] to hardware */
-#ifdef CONFIG_HANTRO_SECURE
+#ifdef CONFIG_MXC_HANTRO_SECURE
 		if (dev->shm)
 			hantro_hwregs_write_multiple(dev->ctx,dev->shm,dev->session,2*4,dev->dec_regs,HANTRO_G2_DEC_LAST_REG*4);
 		else
@@ -895,7 +896,7 @@ static long DecRefreshRegs(hantrodec_t *dev, struct core_desc *Core)
 		/* read all registers from hardware */
 		/* both original and extended regs need to be read */
 		for (i = 0; i <= HANTRO_DEC_ORG_LAST_REG; i++)
-			dev->dec_regs[i] = hantro_hwregs_read(dev, + i*4);
+			dev->dec_regs[i] = hantro_hwregs_read(dev, i*4);
 #ifdef USE_64BIT_ENV
 		for (i = HANTRO_DEC_EXT_FIRST_REG; i <= HANTRO_DEC_EXT_LAST_REG; i++)
 			dev->dec_regs[i] = hantro_hwregs_read(dev, i*4);
@@ -975,7 +976,7 @@ static long WaitDecReadyAndRefreshRegs(hantrodec_t *dev, struct core_desc *Core)
 
 	PDEBUG("wait_event_interruptible DEC[%d]\n", dev->core_id);
 
-#ifdef CONFIG_HANTRO_SECURE
+#ifdef CONFIG_MXC_HANTRO_SECURE
 	if (dev->session)
 	{
 		if (hantro_secure_wait(dev->ctx,dev->session))
@@ -1022,7 +1023,7 @@ static long PPFlushRegs(hantrodec_t *dev, struct core_desc *Core)
 
 	/* write all regs but the status reg[1] to hardware */
 	/* both original and extended regs need to be written */
-#ifdef CONFIG_HANTRO_SECURE
+#ifdef CONFIG_MXC_HANTRO_SECURE
 	if (dev->shm)
 		hantro_hwregs_write_multiple(dev->ctx,dev->shm,dev->session,(HANTRO_PP_ORG_FIRST_REG+1)*4,dev->dec_regs,HANTRO_PP_ORG_LAST_REG*4);
 	else
@@ -1032,7 +1033,7 @@ static long PPFlushRegs(hantrodec_t *dev, struct core_desc *Core)
 			hantro_hwregs_write(dev,i*4,dev->dec_regs[i]);
 	}
 #ifdef USE_64BIT_ENV
-#ifdef CONFIG_HANTRO_SECURE
+#ifdef CONFIG_MXC_HANTRO_SECURE
 	if (dev->shm)
 		hantro_hwregs_write_multiple(dev->ctx,dev->shm,dev->session,HANTRO_PP_EXT_FIRST_REG*4,dev->dec_regs,HANTRO_PP_EXT_LAST_REG*4);
 	else
@@ -1175,7 +1176,7 @@ static long WaitCoreReady(const struct file *filp, int *id)
 
 	PDEBUG("wait_event_interruptible CORE\n");
 
-#ifdef CONFIG_HANTRO_SECURE
+#ifdef CONFIG_MXC_HANTRO_SECURE
 	if (dev->session)
 	{
 		if (hantro_secure_wait(dev->ctx,dev->session))
@@ -1733,13 +1734,18 @@ static int hantrodec_init(struct platform_device *pdev, int id)
 	sema_init(&dev->dec_core_sem, 1);
 	sema_init(&dev->pp_core_sem, 1);
 
+#ifdef CONFIG_MXC_HANTRO_SECURE
+	dev->shm = alloc_shm(dev->ctx,DEC_IO_SIZE_MAX/4);
+	dev->session = hantro_secure_open(dev->ctx,id);
+#endif
+
 	/* read configuration fo all cores */
 	ReadCoreConfig(dev);
 
 	/* reset hardware */
 	ResetAsic(dev);
 
-#ifndef CONFIG_HANTRO_SECURE
+#ifndef CONFIG_MXC_HANTRO_SECURE
 	int irq;
 	/* register irq for each core*/
 	irq = platform_get_irq_byname(pdev, "irq_hantro");
@@ -1765,11 +1771,6 @@ static int hantrodec_init(struct platform_device *pdev, int id)
 	dev->irq_rx.counter = 0;
 	dev->irq_tx.counter = 0;
 	irq_set_status_flags(irq, IRQ_DISABLE_UNLAZY);
-#endif
-
-#ifdef CONFIG_HANTRO_SECURE
-	dev->shm = alloc_shm(dev->ctx,DEC_IO_SIZE_MAX/4);
-	dev->session = hantro_secure_open(dev->ctx,id);
 #endif
 
 	pr_info("hantrodec %d : module inserted. Major = %d\n", id, hantrodec_major);
@@ -1809,7 +1810,7 @@ static void hantrodec_cleanup(int id)
 
 	//unregister_chrdev(hantrodec_major, "hantrodec");
 
-#ifdef CONFIG_HANTRO_SECURE
+#ifdef CONFIG_MXC_HANTRO_SECURE
 	if (dev->session)
 	{
 		tee_client_close_session(dev->ctx, dev->session);
@@ -1921,7 +1922,7 @@ static void ReleaseIO(int i)
 	//}
 }
 
-#ifndef CONFIG_HANTRO_SECURE
+#ifndef CONFIG_MXC_HANTRO_SECURE
 /*---------------------------------------------------------------------------
  *Function name   : hantrodec_isr
  *Description     : interrupt handler
@@ -2064,7 +2065,7 @@ static int hantro_dev_probe(struct platform_device *pdev)
 	pr_debug("hantro: dec, bus clock: 0x%lX, 0x%lX\n", clk_get_rate(hantrodec_data[id].clk.dec),
 				clk_get_rate(hantrodec_data[id].clk.bus));
 
-#ifdef CONFIG_HANTRO_SECURE
+#ifdef CONFIG_MXC_HANTRO_SECURE
 	hantrodec_data[id].ctx = hantro_secure_open_context();
 #endif
 
@@ -2123,7 +2124,7 @@ static int hantro_dev_remove(struct platform_device *pdev)
 	HANTRO_UNREG_THERMAL_NOTIFIER(&hantro_thermal_hot_notifier);
 #endif
 
-#ifdef CONFIG_HANTRO_SECURE
+#ifdef CONFIG_MXC_HANTRO_SECURE
 	if (dev->ctx)
 	{
 		tee_client_close_context(dev->ctx);

@@ -11,11 +11,4 @@ config MXC_HANTRO_845
 	---help---
 	  VPU codec device.
 
-config MXC_HANTRO_SECURE
-	tristate "Support for Secure VPU driver with OPTEE"
-	depends on TEE && OPTEE
-	default y
-	---help---
-	  VPU secure driver.
-
 endmenu
