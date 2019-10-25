@@ -28,36 +28,143 @@
 #define PTA_HANTRO_VPU_CMD_WRITE			2
 #define PTA_HANTRO_VPU_CMD_WRITE_MULTIPLE	3
 
+#define HXDEC_MAX_CORES             	    2
+
 typedef struct {
-       uint32_t timeLow;
-       uint16_t timeMid;
-       uint16_t timeHiAndVersion;
-       uint8_t clockSeqAndNode[8];
+	uint32_t timeLow;
+	uint16_t timeMid;
+	uint16_t timeHiAndVersion;
+	uint8_t clockSeqAndNode[8];
 } RTC_UUID;
 
-struct tee_shm *alloc_shm(struct tee_context *ctx, size_t size)
-{
-	if (ctx == NULL)
-		return NULL;
+typedef struct {
+	struct tee_context *ctx;
+	uint32_t session;
+	struct tee_shm* shm;
+} hantro_secure_core;
 
-	return tee_shm_alloc(ctx,size,TEE_SHM_MAPPED);
+static hantro_secure_core Cores[HXDEC_MAX_CORES];
+static struct tee_context *base_ctx = NULL;
+static uint32_t base_session = 0;
+
+/*
+	Utility functions
+*/
+
+static int hantrodec_optee_match(struct tee_ioctl_version_data *ver,
+				const void *data)
+{
+	if (ver->impl_id == TEE_IMPL_ID_OPTEE)
+		return 1;
+	else
+		return 0;
 }
 
-void release_shm(struct tee_shm *shm)
+static void uuid_to_octets(uint8_t d[TEE_IOCTL_UUID_LEN], const RTC_UUID *s)
 {
+	d[0] = s->timeLow >> 24;
+	d[1] = s->timeLow >> 16;
+	d[2] = s->timeLow >> 8;
+	d[3] = s->timeLow;
+	d[4] = s->timeMid >> 8;
+	d[5] = s->timeMid;
+	d[6] = s->timeHiAndVersion >> 8;
+	d[7] = s->timeHiAndVersion;
+	memcpy(d + 8, s->clockSeqAndNode, sizeof(s->clockSeqAndNode));
+}
+
+static struct tee_context* get_context(uint32_t Core)
+{
+	if (Core < HXDEC_MAX_CORES)
+		return Cores[Core].ctx;
+	if (Core == 0xFFFFFFFF)
+		return base_ctx;
+
+	pr_err("%s no context found [%d]\n",__func__,Core);
+	return NULL;
+}
+
+static void set_context(uint32_t Core, struct tee_context *ctx)
+{
+	if (Core < HXDEC_MAX_CORES)
+		Cores[Core].ctx = ctx;
+	if (Core == 0xFFFFFFFF)
+		base_ctx = ctx;
+}
+
+static uint32_t get_session(uint32_t Core)
+{
+	if (Core < HXDEC_MAX_CORES)
+		return Cores[Core].session;
+	if (Core == 0xFFFFFFFF)
+		return base_session;
+
+	pr_err("%s no session found [%d]\n",__func__,Core);
+	return 0;
+}
+
+static void set_session(uint32_t Core, uint32_t session)
+{
+	if (Core < HXDEC_MAX_CORES)
+		Cores[Core].session = session;
+	if (Core == 0xFFFFFFFF)
+		base_session = session;
+}
+
+static struct tee_shm* get_shm(uint32_t Core)
+{
+	if (Core < HXDEC_MAX_CORES)
+		return Cores[Core].shm;
+
+	pr_err("%s no shared mem found [%d]\n",__func__,Core);
+	return NULL;
+}
+
+static void set_shm(uint32_t Core, struct tee_shm *shm)
+{
+	if (Core < HXDEC_MAX_CORES)
+		Cores[Core].shm = shm;
+}
+
+/*
+	API functions
+*/
+
+bool hantro_secure_alloc_shm(uint32_t Core, size_t size)
+{
+	struct tee_context *ctx;
+
+	ctx = get_context(Core);
+	if (ctx == NULL)
+		return false;
+
+	set_shm(Core, tee_shm_alloc(ctx,size,TEE_SHM_MAPPED));
+	return true;
+}
+
+void hantro_secure_release_shm(uint32_t Core)
+{
+	struct tee_shm *shm;
+
+	shm = get_shm(Core);
 	if (shm)
 		tee_shm_free(shm);
 }
 
-void hantro_secure_regs_write(struct tee_context *ctx, uint32_t session,
+void hantro_secure_regs_write(uint32_t Core,
 		       uint32_t offset, uint32_t value)
 {
 	int ret = 0;
 	struct tee_ioctl_invoke_arg inv_arg;
 	struct tee_param param[4];
+	struct tee_context *ctx;
+	uint32_t session;
 
+	ctx = get_context(Core);
 	if (ctx == NULL)
 		return;
+
+	session = get_session(Core);
 
 	memset(&inv_arg, 0, sizeof(inv_arg));
 	memset(&param, 0, sizeof(param));
@@ -79,18 +186,26 @@ void hantro_secure_regs_write(struct tee_context *ctx, uint32_t session,
 	}
 }
 
-void hantro_hwregs_write_multiple(struct tee_context *ctx, struct tee_shm* shm, uint32_t session,
+void hantro_secure_hwregs_write_multiple(uint32_t Core,
 		       uint32_t offset, void *regs, uint32_t size)
 {
 	int ret = 0;
 	struct tee_ioctl_invoke_arg inv_arg;
 	struct tee_param param[4];
+	struct tee_context *ctx;
+	struct tee_shm* shm;
+	uint32_t session;
+
+	ctx = get_context(Core);
 
 	if (ctx == NULL)
 		return;
 	// check buffer overflow
 	if (offset + size < offset)
 		return;
+
+	session = get_session(Core);
+	shm = get_shm(Core);
 
 	memcpy(tee_shm_get_va(shm,offset),regs + offset,size);
 	memset(&inv_arg, 0, sizeof(inv_arg));
@@ -116,15 +231,21 @@ void hantro_hwregs_write_multiple(struct tee_context *ctx, struct tee_shm* shm, 
 	}
 }
 
-uint32_t hantro_secure_regs_read(struct tee_context *ctx, uint32_t session,
+uint32_t hantro_secure_regs_read(uint32_t Core,
 		       uint32_t offset)
 {
 	int ret = 0;
 	struct tee_ioctl_invoke_arg inv_arg;
 	struct tee_param param[4];
+	struct tee_context *ctx;
+	uint32_t session;
+
+	ctx = get_context(Core);
 
 	if (ctx == NULL)
 		return 0;
+
+	session = get_session(Core);
 
 	memset(&inv_arg, 0, sizeof(inv_arg));
 	memset(&param, 0, sizeof(param));
@@ -148,14 +269,21 @@ uint32_t hantro_secure_regs_read(struct tee_context *ctx, uint32_t session,
 	return param[1].u.value.a;
 }
 
-uint32_t hantro_secure_wait(struct tee_context *ctx, uint32_t session)
+bool hantro_secure_wait(uint32_t Core)
 {
 	int ret = 0;
 	struct tee_ioctl_invoke_arg inv_arg;
 	struct tee_param param[4];
 
+	struct tee_context *ctx;
+	uint32_t session;
+
+	ctx = get_context(Core);
+
 	if (ctx == NULL)
-		return -1;
+		return false;
+
+	session = get_session(Core);
 
 	memset(&inv_arg, 0, sizeof(inv_arg));
 	memset(&param, 0, sizeof(param));
@@ -173,21 +301,13 @@ uint32_t hantro_secure_wait(struct tee_context *ctx, uint32_t session)
 	if ((ret < 0) || inv_arg.ret) {
 		pr_err("PTA_HANTRO_VPU_CMD_WAIT invoke function err: 0x%08X 0x%08X\n",
 		       ret,inv_arg.ret);
-		return -1;
+		return false;
 	}
-	return 0;
+
+	return true;
 }
 
-static int hantrodec_optee_match(struct tee_ioctl_version_data *ver,
-				const void *data)
-{
-	if (ver->impl_id == TEE_IMPL_ID_OPTEE)
-		return 1;
-	else
-		return 0;
-}
-
-struct tee_context* hantro_secure_open_context(void)
+bool hantro_secure_open_context(uint32_t Core)
 {
 	struct tee_context *ctx;
 	struct tee_ioctl_version_data vers = {
@@ -202,35 +322,38 @@ struct tee_context* hantro_secure_open_context(void)
 	if (IS_ERR(ctx))
 	{
 		pr_err("unable to open tee ctx %p\n",(void*)ctx);
-		ctx = NULL;
+		return false;
 	}
 
-	return ctx;
+	set_context(Core,ctx);
+
+	return true;
 }
 
-static void uuid_to_octets(uint8_t d[TEE_IOCTL_UUID_LEN], const RTC_UUID *s)
+void hantro_secure_close_context(uint32_t Core)
 {
-       d[0] = s->timeLow >> 24;
-       d[1] = s->timeLow >> 16;
-       d[2] = s->timeLow >> 8;
-       d[3] = s->timeLow;
-       d[4] = s->timeMid >> 8;
-       d[5] = s->timeMid;
-       d[6] = s->timeHiAndVersion >> 8;
-       d[7] = s->timeHiAndVersion;
-       memcpy(d + 8, s->clockSeqAndNode, sizeof(s->clockSeqAndNode));
+	struct tee_context *ctx;
+
+	ctx = get_context(Core);
+	if (ctx)
+	{
+		tee_client_close_context(ctx);
+		set_context(Core,NULL);
+	}
 }
 
-uint32_t hantro_secure_open(struct tee_context* ctx, uint32_t id)
+bool hantro_secure_open_session(uint32_t Core)
 {
 	const RTC_UUID pta_uuid = PTA_HANTRO_VPU_PTA_UUID;
 	struct tee_ioctl_open_session_arg sess_arg;
 	struct tee_param param[4];
 	struct tee_param *params = NULL;
 	int result;
+	struct tee_context *ctx;
 
+	ctx = get_context(Core);
 	if (ctx == NULL)
-		return 0;
+		return false;
 
 	memset(&sess_arg, 0, sizeof(sess_arg));
 	memset(&param, 0, sizeof(param));
@@ -239,13 +362,13 @@ uint32_t hantro_secure_open(struct tee_context* ctx, uint32_t id)
 	uuid_to_octets(sess_arg.uuid, &pta_uuid);
 	sess_arg.clnt_login = TEE_IOCTL_LOGIN_PUBLIC;
 
-	if (id != 0xFFFFFFFF)
+	if (Core != 0xFFFFFFFF)
 	{
 		sess_arg.num_params = 4;
 
 		/* Fill invoke cmd params */
 		param[0].attr = TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INPUT;
-		param[0].u.value.a = id;
+		param[0].u.value.a = Core;
 
 		params = param;
 	} else {
@@ -255,8 +378,28 @@ uint32_t hantro_secure_open(struct tee_context* ctx, uint32_t id)
 	result = tee_client_open_session(ctx, &sess_arg, params);
 	if ((result < 0) || sess_arg.ret) {
 		pr_err("unable to open pta session 0x%08X\n",sess_arg.ret);
-		return 0;
+		return -1;
 	}
 
-	return sess_arg.session;
+	set_session(Core,sess_arg.session);
+
+	return true;
 }
+
+void hantro_secure_close_session(uint32_t Core)
+{
+	struct tee_context *ctx;
+	uint32_t session;
+
+	ctx = get_context(Core);
+
+	if (ctx)
+	{
+		session = get_session(Core);
+
+		tee_client_close_session(ctx,session);
+
+		set_session(Core,0);
+	}
+}
+
