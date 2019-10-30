@@ -301,15 +301,9 @@ struct ion_heap *ion_unmapped_heap_create(struct rmem_unmapped *heap_data)
 	struct ion_unmapped_heap *unmapped_heap;
 	int ret;
 
-	struct page *page;
 	size_t size;
 
-	page = pfn_to_page(PFN_DOWN(heap_data->base));
 	size = heap_data->size;
-
-	ret = ion_heap_pages_zero(page, size, pgprot_writecombine(PAGE_KERNEL));
-	if (ret)
-		return ERR_PTR(ret);
 
 	unmapped_heap = kzalloc(sizeof(*unmapped_heap), GFP_KERNEL);
 	if (!unmapped_heap)
