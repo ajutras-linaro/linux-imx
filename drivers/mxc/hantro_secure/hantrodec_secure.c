@@ -27,6 +27,7 @@
 #define PTA_HANTRO_VPU_CMD_READ				1
 #define PTA_HANTRO_VPU_CMD_WRITE			2
 #define PTA_HANTRO_VPU_CMD_WRITE_MULTIPLE	3
+#define PTA_HANTRO_VPU_CMD_READ_MULTIPLE	4
 
 #define HXDEC_MAX_CORES             	    2
 
@@ -200,6 +201,8 @@ void hantro_secure_hwregs_write_multiple(uint32_t Core,
 
 	if (ctx == NULL)
 		return;
+	if (regs == NULL)
+		return;
 	// check buffer overflow
 	if (offset + size < offset)
 		return;
@@ -229,6 +232,54 @@ void hantro_secure_hwregs_write_multiple(uint32_t Core,
 		pr_err("PTA_HANTRO_VPU_CMD_WRITE_MULTIPLE invoke function err: 0x%08X 0x%08X\n",
 		       ret,inv_arg.ret);
 	}
+}
+
+void hantro_secure_hwregs_read_multiple(uint32_t Core,
+		       uint32_t offset, void *regs, uint32_t size)
+{
+	int ret = 0;
+	struct tee_ioctl_invoke_arg inv_arg;
+	struct tee_param param[4];
+	struct tee_context *ctx;
+	struct tee_shm* shm;
+	uint32_t session;
+
+	ctx = get_context(Core);
+
+	if (ctx == NULL)
+		return;
+	if (regs == NULL)
+		return;
+	// check buffer overflow
+	if (offset + size < offset)
+		return;
+
+	session = get_session(Core);
+	shm = get_shm(Core);
+
+	memset(&inv_arg, 0, sizeof(inv_arg));
+	memset(&param, 0, sizeof(param));
+
+	/* Invoke PTA_HANTRO_VPU_CMD_READ_MULTIPLE function */
+	inv_arg.func = PTA_HANTRO_VPU_CMD_READ_MULTIPLE;
+	inv_arg.session = session;
+	inv_arg.num_params = 4;
+
+	/* Fill invoke cmd params */
+	param[0].attr = TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INPUT;
+	param[0].u.value.a = offset;
+	param[1].attr = TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_OUTPUT;
+	param[1].u.memref.shm_offs = offset;
+	param[1].u.memref.size = size;
+	param[1].u.memref.shm = shm;
+
+	ret = tee_client_invoke_func(ctx, &inv_arg, param);
+	if ((ret < 0) || inv_arg.ret) {
+		pr_err("PTA_HANTRO_VPU_CMD_READ_MULTIPLE invoke function err: 0x%08X 0x%08X\n",
+		       ret,inv_arg.ret);
+	}
+
+	memcpy(regs + offset, tee_shm_get_va(shm,offset),size);
 }
 
 uint32_t hantro_secure_regs_read(uint32_t Core,

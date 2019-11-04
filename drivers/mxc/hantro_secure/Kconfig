@@ -2,7 +2,7 @@
 # Codec configuration
 #
 
-menu "MXC HANTRO(Video Processing Unit) 845 support"
+menu "MXC HANTRO(Video Processing Unit) Secure support"
 	depends on ARCH_FSL_IMX8MQ
 
 config MXC_HANTRO_SECURE

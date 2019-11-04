@@ -170,7 +170,9 @@ static int cores = 2;
 typedef struct {
 	//char *buffer;
 	unsigned int iosize;
+#ifndef CONFIG_MXC_HANTRO_SECURE
 	volatile u8 *hwregs;
+#endif
 	int irq;
 	int hw_id;
 	int core_id;
@@ -1689,11 +1691,6 @@ static int hantrodec_init(struct platform_device *pdev, int id)
 	sema_init(&dev->dec_core_sem, 1);
 	sema_init(&dev->pp_core_sem, 1);
 
-#ifdef CONFIG_MXC_HANTRO_SECURE
-	hantro_secure_alloc_shm(id,DEC_IO_SIZE_MAX/4);
-	hantro_secure_open_session(id);
-#endif
-
 	/* read configuration fo all cores */
 	ReadCoreConfig(dev);
 
@@ -1765,11 +1762,6 @@ static void hantrodec_cleanup(int id)
 
 	//unregister_chrdev(hantrodec_major, "hantrodec");
 
-#ifdef CONFIG_MXC_HANTRO_SECURE
-	hantro_secure_close_session(id);
-	hantro_secure_release_shm(id);
-#endif
-
 	PDEBUG("hantrodec: module removed\n");
 
 }
@@ -1788,14 +1780,18 @@ static int CheckHwId(hantrodec_t *dev)
 	int found = 0;
 
 	//for (i = 0; i < cores; i++) {
-		if (dev->hwregs != NULL) {
-			hwid = readl(dev->hwregs);
+#ifndef CONFIG_MXC_HANTRO_SECURE
+		if (dev->hwregs != NULL)
+#endif
+		{
+			hwid = hantro_hwregs_read(dev,0);
+
 			pr_debug("hantrodec: Core %d HW ID=0x%16lx\n", dev->core_id, hwid);
 			hwid = (hwid >> 16) & 0xFFFF; /* product version only */
 
 			while (num_hw--) {
 				if (hwid == DecHwId[num_hw]) {
-					pr_debug("hantrodec: Supported HW found at 0x%16lx\n",
+					pr_debug("hantrodec: Supported HW found at 0x%016lx\n",
 							multicorebase[dev->core_id]);
 					found++;
 					dev->hw_id = hwid;
@@ -1803,7 +1799,7 @@ static int CheckHwId(hantrodec_t *dev)
 				}
 			}
 			if (!found) {
-				pr_err("hantrodec: Unknown HW found at 0x%16lx\n",	multicorebase[dev->core_id]);
+				pr_err("hantrodec: Unknown HW found at 0x%016lx\n",	multicorebase[dev->core_id]);
 				return 0;
 			}
 			found = 0;
@@ -1825,6 +1821,7 @@ static int ReserveIO(int i)
 {
 	//int i;
 
+#ifndef CONFIG_MXC_HANTRO_SECURE
 	//for (i = 0; i < HXDEC_MAX_CORES; i++) {
 		if (multicorebase[i] != -1) {
 			if (!request_mem_region(multicorebase[i], hantrodec_data[i].iosize, "hantrodec0")) {
@@ -1843,6 +1840,10 @@ static int ReserveIO(int i)
 			//hantrodec_data.cores++;
 		}
 	//}
+#else
+	hantro_secure_alloc_shm(i,DEC_IO_SIZE_MAX);
+	hantro_secure_open_session(i);
+#endif
 
 	/* check for correct HW */
 	if (!CheckHwId(&hantrodec_data[i])) {
@@ -1864,11 +1865,17 @@ static void ReleaseIO(int i)
 {
 	//int i;
 
+#ifndef CONFIG_MXC_HANTRO_SECURE
 	//for (i = 0; i < hantrodec_data.cores; i++) {
 		if (hantrodec_data[i].hwregs)
 			iounmap((void *) hantrodec_data[i].hwregs);
 		release_mem_region(multicorebase[i], hantrodec_data[i].iosize);
 	//}
+#else
+	hantro_secure_close_session(i);
+	hantro_secure_release_shm(i);
+#endif
+
 }
 
 #ifndef CONFIG_MXC_HANTRO_SECURE
@@ -2015,7 +2022,11 @@ static int hantro_dev_probe(struct platform_device *pdev)
 				clk_get_rate(hantrodec_data[id].clk.bus));
 
 #ifdef CONFIG_MXC_HANTRO_SECURE
-	hantro_secure_open_context(id);
+	if (!hantro_secure_open_context(id))
+	{
+		pr_err("hantro: secure context open failed\n");
+		return -ENODEV;
+	}
 #endif
 
 	hantro_clk_enable(&hantrodec_data[id].clk);
