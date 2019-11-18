@@ -2076,7 +2076,7 @@ static void __exit hantro_exit(void)
 	platform_driver_unregister(&mxchantro_driver);
 }
 
-module_init(hantro_init);
+late_initcall(hantro_init);
 module_exit(hantro_exit);
 
 /* module description */
