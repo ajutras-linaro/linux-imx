@@ -112,6 +112,7 @@ dtb-$(CONFIG_ARCH_FSL_IMX8MQ) += fsl-imx8mq-ddr3l-arm2.dtb \
 				 fsl-imx8mq-evk-dual-display-b3.dtb \
 				 fsl-imx8mq-evk-ak4497.dtb \
 				 fsl-imx8mq-evk-audio-tdm.dtb \
+				 fsl-imx8mq-evk-optee.dtb \
 				 fsl-imx8mq-evk-drm.dtb \
 				 fsl-imx8mq-evk-root.dtb \
 				 fsl-imx8mq-evk-inmate.dtb \

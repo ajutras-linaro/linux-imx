@@ -12,13 +12,9 @@
  * GNU General Public License for more details.
  */
 
-#include "fsl-imx8mq-evk.dts"
+#include "fsl-imx8mq-evk-optee.dts"
 
 &resmem {
-	carveout_region: imx_ion@0 {
-		status = "disabled";
-	};
-
 	display_region: display {
 		compatible = "imx-secure-ion-pool";
 		reg = <0x0 0xce000000 0 0x30000000>;
