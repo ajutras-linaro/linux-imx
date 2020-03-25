@@ -76,6 +76,8 @@ static void imx_hdmi_audio_avi_set(state_struct *state,
 		frame.channel_allocation = 0;
 	else if (channels == 4)
 		frame.channel_allocation = 0x3;
+    else if (channels == 6)
+        frame.channel_allocation = 0xB;
 	else if (channels == 8)
 		frame.channel_allocation = 0x13;
 

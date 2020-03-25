@@ -89,6 +89,13 @@ CDN_API_STATUS CDN_API_AudioConfigCore(state_struct *state,
 	int i;
 	int lanesParam;
 	u32 I2S_DEC_PORT_EN_Val;
+    u32 disable_port3 = 0;
+
+    if (numOfChannels == 6)
+    {
+        numOfChannels = 8;
+        disable_port3 = 1;
+    }
 
 	if (numOfChannels == 2) {
 		if (lanes == 1)
@@ -103,7 +110,7 @@ CDN_API_STATUS CDN_API_AudioConfigCore(state_struct *state,
 			      ADDR_SOURCE_AIF_DECODER + (AUDIO_SRC_CNFG << 2),
 			      0x20000);
 		cdn_apb_write(state,
-			      ADDR_SOURCE_AIF_SMPL2PCKT + (FIFO_CNTL << 2), 2);
+			      ADDR_SOURCE_AIF_SMPL2PCKT + (FIFO_CNTL << 2), 2 | (disable_port3 << 4));
 		cdn_apb_write(state,
 			      ADDR_SOURCE_AIF_SMPL2PCKT + (SMPL2PKT_CNFG << 2),
 			      F_MAX_NUM_CH(numOfChannels - 1) |
