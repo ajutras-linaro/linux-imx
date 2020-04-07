@@ -7,3 +7,5 @@ obj-$(CONFIG_DRM_IMX_HDP) += imx-hdp.o \
 			API_AFE_mcu1_dp.o \
 			API_AFE_mcu2_dp.o \
 			imx-hdp-audio.o
+
+obj-$(CONFIG_DRM_SDP_HDCP_TA) += imx-hdp-secure.o

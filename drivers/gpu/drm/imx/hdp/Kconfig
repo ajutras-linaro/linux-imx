@@ -17,3 +17,10 @@ config IMX_HDP_CEC
 	---help---
 	  When selected the imx hdmi will support the optional
 	  HDMI CEC feature.
+
+config DRM_SDP_HDCP_TA
+        bool "i.MX8M HDCP/HDMI secure registers"
+        default n
+        depends on DRM_IMX_HDP
+        help
+          Support HDCP OPTEE Trusted Application to secure HDMI/HDCP registers for i.MX8MQ processor.

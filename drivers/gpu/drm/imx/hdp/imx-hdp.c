@@ -31,6 +31,10 @@
 
 #define B0_SILICON_ID			0x11
 
+#ifdef CONFIG_DRM_SDP_HDCP_TA
+#include <imx-hdp-secure.h>
+#endif
+
 struct drm_display_mode *g_mode;
 uint8_t g_default_mode = 3;
 static struct drm_display_mode edid_cea_modes[] = {
@@ -370,16 +374,27 @@ void imx8qm_phy_reset(sc_ipc_t ipcHndl, struct hdp_mem *mem, u8 reset)
 
 void imx8mq_phy_reset(sc_ipc_t ipcHndl, struct hdp_mem *mem, u8 reset)
 {
+
+#ifndef CONFIG_DRM_SDP_HDCP_TA
 	void *tmp_addr = mem->rst_base;
-
+#endif
+	DRM_WARN("imx8mq_phy_reset addr: 0x%x\n", mem->rst_base );
 	if (reset)
-		__raw_writel(0x8,
-			     (volatile unsigned int *)(tmp_addr+0x4)); /*set*/
+	{
+#ifdef CONFIG_DRM_SDP_HDCP_TA
+		imx_hdcp_secure_register_write(PTA_HDCP_RESET_BUSID, 0x04, 0x8); /*set*/
+#else
+		__raw_writel(0x8, (volatile unsigned int *)(tmp_addr+0x4)); /*set*/
+#endif
+	}
 	else
-		__raw_writel(0x8,
-			     (volatile unsigned int *)(tmp_addr+0x8)); /*clear*/
-
-
+	{
+#ifdef CONFIG_DRM_SDP_HDCP_TA
+		imx_hdcp_secure_register_write(PTA_HDCP_RESET_BUSID, 0x8, 0x8); /*clear*/
+#else
+		__raw_writel(0x8, (volatile unsigned int *)(tmp_addr+0x8)); /*clear*/
+#endif
+	}
 	return;
 }
 
@@ -1136,13 +1151,19 @@ static int imx8mq_hdp_read(struct hdp_mem *mem,
 			   unsigned int *value)
 {
 	unsigned int temp;
+#ifndef CONFIG_DRM_SDP_HDCP_TA
 	void *tmp_addr;
-
+#endif
 	mutex_lock(&mem->mutex);
+#ifdef CONFIG_DRM_SDP_HDCP_TA
+	temp  = imx_hdcp_secure_register_read(PTA_HDCP_HDP_BUSID, addr);
+#else
 	tmp_addr = mem->regs_base + addr;
 	temp = __raw_readl((volatile unsigned int *)tmp_addr);
+#endif
 	*value = temp;
 	mutex_unlock(&mem->mutex);
+
 	return 0;
 }
 
@@ -1150,11 +1171,17 @@ static int imx8mq_hdp_write(struct hdp_mem *mem,
 			    unsigned int addr,
 			    unsigned int value)
 {
+#ifndef CONFIG_DRM_SDP_HDCP_TA
 	void *tmp_addr;
-
+#endif
 	mutex_lock(&mem->mutex);
+
+#ifdef CONFIG_DRM_SDP_HDCP_TA
+	imx_hdcp_secure_register_write(PTA_HDCP_HDP_BUSID, addr, value);
+#else
 	tmp_addr = mem->regs_base + addr;
 	__raw_writel(value, (volatile unsigned int *)tmp_addr);
+#endif
 	mutex_unlock(&mem->mutex);
 	return 0;
 }
@@ -1164,11 +1191,16 @@ static int imx8mq_hdp_sread(struct hdp_mem *mem,
 			    unsigned int *value)
 {
 	unsigned int temp;
+#ifndef CONFIG_DRM_SDP_HDCP_TA
 	void *tmp_addr;
-
+#endif
 	mutex_lock(&mem->mutex);
+#ifdef CONFIG_DRM_SDP_HDCP_TA
+	temp  = imx_hdcp_secure_register_read(PTA_HDCP_HDP_SEC_BUSID, addr);
+#else
 	tmp_addr = mem->ss_base + addr;
 	temp = __raw_readl((volatile unsigned int *)tmp_addr);
+#endif
 	*value = temp;
 	mutex_unlock(&mem->mutex);
 	return 0;
@@ -1178,11 +1210,16 @@ static int imx8mq_hdp_swrite(struct hdp_mem *mem,
 			     unsigned int addr,
 			     unsigned int value)
 {
+#ifndef CONFIG_DRM_SDP_HDCP_TA
 	void *tmp_addr;
-
+#endif
 	mutex_lock(&mem->mutex);
+#ifdef CONFIG_DRM_SDP_HDCP_TA
+	imx_hdcp_secure_register_write(PTA_HDCP_HDP_SEC_BUSID, addr, value);
+#else
 	tmp_addr = mem->ss_base + addr;
 	__raw_writel(value, (volatile unsigned int *)tmp_addr);
+#endif
 	mutex_unlock(&mem->mutex);
 	return 0;
 }
@@ -1434,7 +1471,9 @@ static int imx_hdp_imx_bind(struct device *dev, struct device *master,
 	struct drm_encoder *encoder;
 	struct drm_bridge *bridge;
 	struct drm_connector *connector;
+#ifndef CONFIG_DRM_SDP_HDCP_TA
 	struct resource *res;
+#endif
 	u8 hpd;
 	int ret;
 
@@ -1461,8 +1500,64 @@ static int imx_hdp_imx_bind(struct device *dev, struct device *master,
 	if (hdp->irq[HPD_IRQ_OUT] < 0)
 		dev_info(&pdev->dev, "No plug_out irq number\n");
 
-
 	mutex_init(&hdp->mem.mutex);
+
+#ifdef CONFIG_DRM_SDP_HDCP_TA
+	/* Open sessions to access HDCP registers*/
+	if ( imx_hdcp_secure_open_context(PTA_HDCP_HDP_BUSID) )
+	{
+		if ( imx_hdcp_secure_open_session(PTA_HDCP_HDP_BUSID) )
+		{
+			DRM_INFO("PTA_HDCP_HDP_BUSID registered\n");
+		}
+		else
+		{
+			dev_err(dev, "Failed to get HDP CTRL base register\n");
+			return -EINVAL;
+		}
+	}
+	else
+	{
+		dev_err(dev, "Failed to get HDP CTRL base register\n");
+		return -EINVAL;
+	}
+
+	if ( imx_hdcp_secure_open_context(PTA_HDCP_HDP_SEC_BUSID) )
+	{
+		if ( imx_hdcp_secure_open_session(PTA_HDCP_HDP_SEC_BUSID) )
+		{
+			DRM_INFO("PTA_HDCP_HDP_SEC_BUSID registered\n");
+		}
+		else
+		{
+			dev_err(dev, "Failed to get HDP CRS base register\n");
+			return -EINVAL;
+		}
+	}
+	else
+	{
+		dev_err(dev, "Failed to get HDP CRS base register\n");
+		return -EINVAL;
+	}
+
+	if ( imx_hdcp_secure_open_context(PTA_HDCP_RESET_BUSID) )
+	{
+		if ( imx_hdcp_secure_open_session(PTA_HDCP_RESET_BUSID) )
+		{
+			DRM_INFO("PTA_HDCP_RESET_BUSID registered\n");
+		}
+		else
+		{
+			dev_err(dev, "Failed to get HDP RESET base register\n");
+			return -EINVAL;
+		}
+	}
+	else
+	{
+		dev_err(dev, "Failed to get HDP RESET base register\n");
+		return -EINVAL;
+	}
+#else
 	/* register map */
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	hdp->mem.regs_base = devm_ioremap_resource(dev, res);
@@ -1482,6 +1577,7 @@ static int imx_hdp_imx_bind(struct device *dev, struct device *master,
 	hdp->mem.rst_base = devm_ioremap_resource(dev, res);
 	if (IS_ERR(hdp->mem.rst_base))
 		dev_warn(dev, "Failed to get HDP RESET base register\n");
+#endif
 
 	hdp->is_cec = of_property_read_bool(pdev->dev.of_node, "fsl,cec");
 
@@ -1731,3 +1827,6 @@ MODULE_AUTHOR("Sandor Yu <Sandor.yu@nxp.com>");
 MODULE_DESCRIPTION("IMX8QM DP Display Driver");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("platform:dp-hdmi-imx");
+#ifdef CONFIG_DRM_SDP_HDCP_TA
+MODULE_SOFTDEP("pre: optee-clnt");
+#endif
