@@ -679,7 +679,7 @@ static int __init optee_driver_init(void)
 
 	return 0;
 }
-module_init(optee_driver_init);
+subsys_initcall_sync(optee_driver_init);
 
 static void __exit optee_driver_exit(void)
 {
